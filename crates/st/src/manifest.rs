@@ -26,7 +26,9 @@ const PARAM_TYPES: &[&str] = &["number", "integer", "bool", "text", "select"];
 const HISTORY_KINDS: &[&str] = &["cluster", "replay"];
 const LANGS: &[&str] = &["rust", "ts"];
 const MIN_TIMER_MS: u64 = 250;
+const MAX_TIMER_MS: u64 = 3_600_000;
 const MAX_MEMORY_MB: u32 = 64;
+const MAX_TEXT_PARAM: usize = 256;
 const MAX_CPU_MS_PER_CALL: u32 = 1000;
 
 #[derive(Debug, Default, Deserialize)]
@@ -98,6 +100,9 @@ pub struct Manifest {
     pub version: String,
     #[serde(default)]
     pub name: Localized,
+    /// Parsed only so that shapes the terminal rejects fail here too.
+    #[serde(default, rename = "description")]
+    _description: Option<Localized>,
     #[serde(default)]
     pub lang: Option<String>,
     #[serde(default)]
@@ -155,13 +160,18 @@ pub fn is_valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(b))
 }
 
+/// Mirrors the terminal: the host is trimmed and lower-cased before the check.
 fn is_valid_host(host: &str) -> bool {
+    let host = host.trim().to_ascii_lowercase();
     !host.is_empty()
         && host.len() <= 253
         && host.contains('.')
-        && host
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
 }
 
 pub fn validate(m: &Manifest) -> Report {
@@ -221,11 +231,11 @@ pub fn validate(m: &Manifest) -> Report {
         }
     }
     if let Some(ms) = m.timer_ms
-        && ms < MIN_TIMER_MS
+        && !(MIN_TIMER_MS..=MAX_TIMER_MS).contains(&ms)
     {
         r.error(
             "invalid_manifest",
-            format!("timer_ms must be >= {MIN_TIMER_MS}"),
+            format!("timer_ms must be within {MIN_TIMER_MS}..={MAX_TIMER_MS}"),
         );
     }
     if !m.feeds.is_empty() {
@@ -265,7 +275,9 @@ fn validate_columns(columns: &[Column], r: &mut Report) {
     }
     let mut seen = HashSet::new();
     for c in columns {
-        if !seen.insert(c.key.as_str()) {
+        if c.key.is_empty() {
+            r.error("invalid_manifest", "columns: empty key");
+        } else if !seen.insert(c.key.as_str()) {
             r.error(
                 "invalid_manifest",
                 format!("column `{}` is declared twice", c.key),
@@ -301,7 +313,9 @@ fn validate_columns(columns: &[Column], r: &mut Report) {
 fn validate_params(params: &[Param], r: &mut Report) {
     let mut seen = HashSet::new();
     for p in params {
-        if !seen.insert(p.key.as_str()) {
+        if p.key.is_empty() {
+            r.error("invalid_manifest", "params: empty key");
+        } else if !seen.insert(p.key.as_str()) {
             r.error(
                 "invalid_manifest",
                 format!("param `{}` is declared twice", p.key),
@@ -331,9 +345,11 @@ fn validate_params(params: &[Param], r: &mut Report) {
         };
         let fits = match p.kind.as_str() {
             "number" => default.as_f64().is_some(),
-            "integer" => default.as_i64().is_some(),
+            "integer" => default.as_f64().is_some_and(|v| v.fract() == 0.0),
             "bool" => default.as_bool().is_some(),
-            "text" => default.as_str().is_some(),
+            "text" => default
+                .as_str()
+                .is_some_and(|t| t.chars().count() <= MAX_TEXT_PARAM),
             "select" => default
                 .as_str()
                 .is_some_and(|d| p.options.iter().any(|o| o == d)),
@@ -343,6 +359,13 @@ fn validate_params(params: &[Param], r: &mut Report) {
             r.error(
                 "invalid_manifest",
                 format!("param `{}` default does not fit type `{}`", p.key, p.kind),
+            );
+        } else if let Some(v) = default.as_f64()
+            && (p.min.is_some_and(|min| v < min) || p.max.is_some_and(|max| v > max))
+        {
+            r.error(
+                "invalid_manifest",
+                format!("param `{}` default {v} is outside [min, max]", p.key),
             );
         }
         if p.title.is_blank() {
@@ -421,6 +444,51 @@ limits: {memory_mb: 128}
             "memory_mb",
         ] {
             assert!(all.contains(needle), "missing `{needle}` in:\n{all}");
+        }
+    }
+
+    #[test]
+    fn host_rules_match_the_terminal() {
+        let base = GOOD.replace("timer_ms: 60000", "timer_ms: 3600000");
+        let cases = [
+            (
+                "http: [fapi.binance.com]",
+                "http: [\" FAPI.Binance.com \"]",
+                true,
+            ),
+            (
+                "http: [fapi.binance.com]",
+                "http: [fapi..binance.com]",
+                false,
+            ),
+            ("timer_ms: 3600000", "timer_ms: 3600001", false),
+            ("default: 1000000, min: 0", "default: -1, min: 0", false),
+            ("default: both", "default: none", false),
+            (
+                "pricing: {model: free}",
+                "description: {en: \"Open interest\"}",
+                true,
+            ),
+            (
+                "pricing: {model: free}",
+                "description: \"just text\"",
+                false,
+            ),
+            (
+                "type: number, title: {en: Min OI}, default: 1000000",
+                "type: integer, title: {en: Min OI}, default: 5.0",
+                true,
+            ),
+            (
+                "type: number, title: {en: Min OI}, default: 1000000",
+                "type: integer, title: {en: Min OI}, default: 5.5",
+                false,
+            ),
+        ];
+        for (from, to, ok) in cases {
+            let text = base.replace(from, to);
+            let valid = parse(&text).is_ok_and(|m| validate(&m).errors.is_empty());
+            assert_eq!(valid, ok, "{to}");
         }
     }
 
