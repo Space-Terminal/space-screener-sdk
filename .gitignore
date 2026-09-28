@@ -1,0 +1,5 @@
+/target
+**/target
+*.wasm
+!crates/**/tests/fixtures/*.wasm
+.DS_Store
