@@ -192,8 +192,9 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 ```
 
 - `emit_rows` upserts by `key` (≤ 128 chars); `replace: true` replaces the whole table. `expire` removes
-  rows. `ttl_s` removes a row that was not re-emitted in time. At most 5000 rows per plugin, each at most
-  16 KiB as serialized JSON, 32 MiB of rows in total.
+  rows. `ttl_s` removes a row that was not re-emitted in time. At most 10000 rows per plugin (rows past
+  the cap are dropped by the host — filter and truncate in the plugin), each at most 16 KiB as serialized
+  JSON, 32 MiB of rows in total.
 - `symbol`, `exchange`, `market` make the row clickable: the default click opens that market.
 - `rank` (default 0): higher ranks stay above lower ones whatever the sort (pins, favourites).
 - A cell is a JSON number, string, bool or `null`, or `{"v": value, "tone"?: "pos"|"neg"|"muted"|"warn"|"accent", "text"?: "shown instead of v"}`.
@@ -214,13 +215,14 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 | Limit | Value |
 |---|---|
 | Memory | `limits.memory_mb`, at most 64 MB |
-| CPU per call | `limits.cpu_ms_per_call` (default 250, at most 1000) of wasm time; time spent inside host functions (HTTP) does not count. `init` gets 2000 ms |
+| CPU per call | `limits.cpu_ms_per_call` (default 250, at most 1000): the real CPU time of the plugin's thread, without time inside host functions (HTTP waits) and without time the OS gives to other threads. `init` gets 2000 ms |
+| Endless loops | a watchdog stops a call that stays in wasm longer than max(5 × budget, 5 s) of wall time |
 | Wall time per call | 600 s: one call, HTTP waits included, must finish within it; a round of N requests to `fapi.binance.com` takes about N/5 s |
 | Violations | 3 CPU overruns in a row stop the plugin (pane status "limit exceeded") |
 | After a trap | the terminal recreates the plugin and calls `init` again; in-memory state is lost, `kv` survives |
 | `screener.wasm` | at most 10 MiB |
 | HTTP | `timeout_ms` 1000..=10000; body ≤ 8 MiB per response, ≤ 48 MiB per `http_batch` |
-| Rows | ≤ 5000 rows, ≤ 16 KiB each (serialized), ≤ 32 MiB in total |
+| Rows | ≤ 10000 rows (the rest is dropped by the host), ≤ 16 KiB each (serialized), ≤ 32 MiB in total |
 
 ## Local API for tooling (`st`)
 

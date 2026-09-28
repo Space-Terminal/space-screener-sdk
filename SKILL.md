@@ -26,7 +26,8 @@ and HTTP, and hands rows back. The full wire contract is `ABI.md` in the SDK rep
    exactly like the terminal does. Fix every error it prints before going on.
 5. **Run.** With Space Terminal running: `st dev` — installs the plugin, asks the terminal to open a
    pane for it, then rebuilds and reinstalls on every save and prints the plugin log. Leave it running
-   in the background.
+   in the background. Every reinstall restarts the plugin and wipes its in-memory state, so 5/15-minute
+   windows start over after each save; keep small state that must survive in `kv_set`.
 6. **Check.** `st rows` (what the pane shows; `--json` prints the terminal's response as is:
    `{ok, version, status, status_text?, rows}`), `st logs` (plugin log), `st list`
    (status: running / stopped / error / limit). Iterate until rows look right, then tell the user to
@@ -89,7 +90,7 @@ so keep rounds short.
 | `history_cluster(&req)` / `history_replay(&req)` | cloud history; needs `history: [cluster]` / `[replay]` in the manifest |
 | `now_ms()` | current time (there is no `std::time` in wasm) |
 | `info!`, `warn!`, `error!`, `debug!` | plugin log (`st logs`) |
-| `params()`, `lang()` | current parameters, UI language |
+| `params()`, `lang()` | current parameters (`params().f64_or("k", 1.0)`, `i64_or`, `bool_or`, `str("k")`), UI language |
 
 Rows:
 
@@ -103,27 +104,34 @@ Row::new(format!("{exchange}:{symbol}"))                    // stable unique key
     .rank(1)                                                 // pinned above rank 0
 ```
 
-Every `cells` key must be a column `key` in the manifest. At most 5000 rows, each ≤ 16 KiB of JSON.
+Every `cells` key must be a column `key` in the manifest. Each row ≤ 16 KiB of JSON. The host keeps at
+most 10000 rows per plugin and drops the rest, so filter and truncate yourself (sort, then keep the top N).
 
 Symbols: put the canonical `BASEQUOTE` in upper case into rows and `MarketRef` (`BTCUSDT`, Hyperliquid
 `BTCUSDC`); the exchange's native symbol (`BTC-USDT-SWAP`, `BTC_USDT`) also works — the terminal
 resolves both. `tickers()`/`symbols()` return the terminal's symbol with `base` and `quote`.
 
 Helpers:
-- `Series::new(mins(16))` — per-key history: `push(ts, v)`, `value_at(ts)`, `change_pct(now, mins(5))`
-  (`None` until enough history). Keep one per key in a `HashMap<String, Series>`; drop stale keys.
+- `Series::new(mins(16))` — per-key history: `push(ts, v)`; `value_at(ts)` is the latest value at or
+  before `ts` (`None` if history starts later); `change_pct(now, mins(5))` compares the last value with
+  `value_at(now - 5 min)` (`None` until enough history). Keep one per key in a `HashMap<String, Series>`;
+  drop stale keys.
 - `secs(n)`, `mins(n)`, `hours(n)` → milliseconds.
-- `space_screener::oi` — open interest (one side, USD) for 8 exchanges: `Collector::new()` then
-  `collector.collect(now_ms)?` → one `Snapshot` per exchange: `result` (items that arrived),
-  `is_complete()`, `summary()` (`"binance 180/200"`, `"mexc: no data"`), `first_error`. Items have
-  `exchange`, canonical `symbol` (`BTCUSDT`, use for rows and clicks), `native_symbol`, `base`, `quote`,
-  `oi_usd`, `price`, `market_ref()`. Add `space_screener::oi::HOSTS` to manifest `http`. Parsers per
-  exchange (`oi::bybit::parse(body)` …) are public if you need only part of it.
+- `space_screener::oi` — open interest (one side, USD) of USDT perpetuals on 8 exchanges (Hyperliquid:
+  USDC perpetuals). Only those contracts come back, no need to filter the quote.
+  `Collector::new()` polls all of `oi::EXCHANGES` (`binance bybit okx bitget gate mexc kucoin
+  hyperliquid`); `Collector::only(&["bybit", "okx"])` polls a subset (see rotation below).
+  `collector.collect(now_ms)?` → one `Snapshot` per exchange: `result: Result<Vec<OpenInterest>>` (items
+  that arrived), `is_complete()`, `summary()` (`"binance 180/200"`, `"mexc: no data"`), `first_error`.
+  `OpenInterest { exchange: &'static str, symbol: String, native_symbol: String, base: String,
+  quote: String, oi_usd: f64, price: f64 }` plus `market_ref()`; `symbol` is canonical (`BTCUSDT`) — use
+  it for rows and clicks. The manifest `http` must list the 8 hosts explicitly (see the example below).
+  Parsers per exchange (`oi::bybit::parse(body)` …) are public if you need only part of it.
 - Binance has no bulk open interest: one request per symbol, and the terminal allows 5 requests/s to
   `fapi.binance.com`, so a round of N symbols takes about N/5 s (200 → 40 s). The collector polls the
   top `BINANCE_TOP_N` = 200 USDT perpetuals by 24h volume; change it with
   `collector.set_binance_top_n(n)`, n in 1..=600 (600 covers every USDT perpetual, ≈ 2 min).
-  Keep `timer_ms` ≥ 60000.
+  Keep `timer_ms` ≥ 60000 when one call polls Binance; with rotation shorter timers are fine.
 
 ## Manifest essentials
 
@@ -157,8 +165,11 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 
 ## Limits
 
-- 64 MB memory; `cpu_ms_per_call` of wasm CPU per call (default 250, max 1000; HTTP waiting does not
-  count); 3 overruns in a row stop the plugin. `http` timeout ≤ 10 s, responses ≤ 8 MiB.
+- 64 MB memory. CPU: the host measures the real CPU time of the plugin's thread — time inside host
+  functions (HTTP waits) and time the OS gives to other threads do not count. Budget
+  `limits.cpu_ms_per_call`: default 250, max 1000; 3 overruns in a row stop the plugin (status `limit`).
+  A separate watchdog stops a call stuck in an endless loop by wall time: max(5 × budget, 5 s) spent in
+  wasm. `http` timeout 1..10 s, responses ≤ 8 MiB.
 - One call (`on_timer` with all its HTTP waits) must finish within 600 s of wall time. Budget
   per-symbol rounds: `fapi.binance.com` allows 5 requests/s, so N symbols ≈ N/5 s.
 - After a crash the terminal restarts the plugin (`init` again): in-memory history is lost, `kv` stays.
@@ -177,7 +188,8 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | `bad_request` on http | only `https://`, no `user:pass@` in the URL, `timeout_ms` 1000..=10000 |
 | `forbidden_export` / start section | build a `cdylib` for wasm32-unknown-unknown with `st build`; WASI/C runtimes (`_start`, `_initialize`) are refused |
 | `limit` status / cpu overrun | parse only the fields you need (`#[derive(Deserialize)]` structs, not `serde_json::Value`), raise `limits.cpu_ms_per_call`, cache slow-changing metadata |
-| slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints (exchange rate limits are shared with the user's trading IP; `fapi.binance.com` is capped at 5 requests/s) |
+| slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints or rotate groups of exchanges (exchange rate limits are shared with the user's trading IP; `fapi.binance.com` is capped at 5 requests/s) |
+| history (5/15 min changes) resets | every `st dev` reinstall and every crash restarts the plugin; windows fill again from scratch |
 | clicks feel slow | do not export `on_click` unless needed — without it the terminal opens the row's market at once |
 | `not_in_click` | `open_market` only from `on_click` exported with `export_screener!(T, on_click)` |
 | plugin restarts, `st logs` shows `panic: …` | fix the panic at the logged location (index out of bounds, `unwrap` on `None`, …) |
@@ -243,13 +255,112 @@ impl Screener for OiScreener {
 export_screener!(OiScreener);
 ```
 
-Manifest: the 8 hosts of `space_screener::oi::HOSTS` in `http`, `timer_ms: 60000`,
-`limits: {cpu_ms_per_call: 1000}`, columns `symbol, exchange, oi, chg5, chg15`. The full example also has
-a `binance_top_n` param (`collector.set_binance_top_n(..)` in `on_timer`).
-Changes stay empty for the first 5/15 minutes — the screener builds history from its own snapshots.
+Manifest for it (write the hosts out: YAML cannot reference `oi::HOSTS`; OKX is `app.okx.com`, not
+`www.okx.com`, which is blocked in parts of the CIS):
+
+```yaml
+http:
+  - fapi.binance.com
+  - api.bybit.com
+  - app.okx.com
+  - api.bitget.com
+  - api.gateio.ws
+  - contract.mexc.com
+  - api-futures.kucoin.com
+  - api.hyperliquid.xyz
+timer_ms: 60000
+limits: {cpu_ms_per_call: 1000}
+columns:
+  - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
+  - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
+  - {key: oi, type: usd, title: {en: "OI, $"}, sort: desc}
+  - {key: chg5, type: percent, title: {en: "OI 5m"}}
+  - {key: chg15, type: percent, title: {en: "OI 15m"}}
+params:
+  - {key: min_oi, type: number, title: {en: "Min OI, $"}, default: 5000000, min: 0}
+```
+
+`min_oi` is a filter, not a cap: at 5M$ it leaves about 1800 of ~2100 contracts, and a lower value can
+exceed the host's 10000-row cap, past which rows are dropped. Sort and truncate to a `limit` param, as
+`examples/oi-8-exchanges` does. The full example also has a `binance_top_n` param
+(`collector.set_binance_top_n(..)` in `on_timer`). Changes stay empty for the first 5/15 minutes — the
+screener builds history from its own snapshots.
+
+### Splitting heavy exchanges (rotation)
+
+A call that polls Binance lasts about N/5 s (40 s for the default 200 symbols) and the other 7 exchanges
+wait for it. Split the work when you want the fast exchanges refreshed more often, when `on_timer` must
+stay short (custom clicks wait for it), or with `binance_top_n` near 600 (≈ 2 min per round): one
+`Collector::only(..)` per group, one group per call, and the latest rows of every exchange kept so the
+table stays whole. With rotation a `timer_ms` below 60000 is fine (for example 15000).
+
+```rust
+use std::collections::HashMap;
+
+use space_screener::oi::{Collector, EXCHANGES};
+use space_screener::prelude::*;
+
+struct OiRotating {
+    groups: Vec<Collector>,
+    turn: usize,
+    tables: HashMap<&'static str, Vec<(f64, Row)>>,
+    history: HashMap<String, Series>,
+}
+
+impl Default for OiRotating {
+    fn default() -> Self {
+        let fast: Vec<&str> = EXCHANGES.into_iter().filter(|e| *e != "binance").collect();
+        Self {
+            groups: vec![Collector::only(&fast), Collector::only(&["binance"])],
+            turn: 0,
+            tables: HashMap::new(),
+            history: HashMap::new(),
+        }
+    }
+}
+
+impl Screener for OiRotating {
+    fn on_timer(&mut self, now_ms: i64) -> ScreenerResult {
+        let group = self.turn % self.groups.len();
+        self.turn += 1;
+        for snapshot in self.groups[group].collect(now_ms)? {
+            // A failed exchange keeps its previous rows.
+            let Ok(items) = snapshot.result else {
+                continue;
+            };
+            let rows = items
+                .into_iter()
+                .map(|oi| {
+                    let key = format!("{}:{}", oi.exchange, oi.symbol);
+                    let series = self.history.entry(key.clone()).or_insert_with(|| Series::new(mins(16)));
+                    series.push(now_ms, oi.oi_usd);
+                    let row = Row::new(key)
+                        .market_ref(&oi.market_ref())
+                        .cell("symbol", oi.symbol.as_str())
+                        .cell("exchange", oi.exchange)
+                        .cell("oi", oi.oi_usd)
+                        .cell("chg5", series.change_pct(now_ms, mins(5)).map(Cell::signed));
+                    (oi.oi_usd, row)
+                })
+                .collect();
+            self.tables.insert(snapshot.exchange, rows);
+        }
+        self.history.retain(|_, s| s.last_ts().is_some_and(|t| now_ms - t < mins(30)));
+        let mut all: Vec<(f64, Row)> = self.tables.values().flatten().cloned().collect();
+        all.sort_by(|a, b| b.0.total_cmp(&a.0));
+        all.truncate(params().i64_or("limit", 1000).max(1) as usize);
+        replace_rows(all.into_iter().map(|(_, row)| row))?;
+        Ok(())
+    }
+}
+
+export_screener!(OiRotating);
+```
 
 ## Done checklist
 
-- `st build` passes with no errors; `st dev` shows `installed … running: true`.
+- `st build` passes with no errors; `st dev` shows `installed …`. The first install prints
+  `running: false, pane: opening`: the plugin starts as soon as the terminal opens the pane, about a
+  second later — `st list` then shows `running`.
 - `st rows` shows the expected rows and `st logs` has no repeating errors; `st list` status is `running`.
 - Rows carry `symbol`/`exchange`/`market` so a click opens the order book; tell the user to click one.
