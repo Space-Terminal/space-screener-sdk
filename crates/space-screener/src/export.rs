@@ -142,8 +142,21 @@ pub mod __private {
         with_screener(state, |s| s.on_params(&params))
     }
 
+    // A panic traps the instance; the hook sends message and location to the plugin log
+    // first, so `st logs` shows why the terminal restarted the plugin.
+    #[cfg(target_arch = "wasm32")]
+    fn install_panic_hook() {
+        static HOOK: std::sync::Once = std::sync::Once::new();
+        HOOK.call_once(|| {
+            std::panic::set_hook(Box::new(|info| {
+                crate::host::log(crate::abi::LogLevel::Error, format!("panic: {info}"));
+            }));
+        });
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub fn run(f: impl FnOnce(&[u8]) -> Outcome) -> i32 {
+        install_panic_hook();
         let input = extism_pdk::input_bytes();
         match f(&input) {
             Ok(()) => 0,
