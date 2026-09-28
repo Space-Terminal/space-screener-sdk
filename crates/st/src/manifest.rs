@@ -29,6 +29,7 @@ const MIN_TIMER_MS: u64 = 250;
 const MAX_TIMER_MS: u64 = 3_600_000;
 const MAX_MEMORY_MB: u32 = 64;
 const MAX_TEXT_PARAM: usize = 256;
+const MIN_CPU_MS_PER_CALL: u32 = 50;
 const MAX_CPU_MS_PER_CALL: u32 = 1000;
 
 #[derive(Debug, Default, Deserialize)]
@@ -286,11 +287,13 @@ pub fn validate(m: &Manifest) -> Report {
         }
         if limits
             .cpu_ms_per_call
-            .is_some_and(|ms| ms == 0 || ms > MAX_CPU_MS_PER_CALL)
+            .is_some_and(|ms| !(MIN_CPU_MS_PER_CALL..=MAX_CPU_MS_PER_CALL).contains(&ms))
         {
             r.error(
                 "invalid_manifest",
-                format!("limits.cpu_ms_per_call must be 1..={MAX_CPU_MS_PER_CALL}"),
+                format!(
+                    "limits.cpu_ms_per_call must be {MIN_CPU_MS_PER_CALL}..={MAX_CPU_MS_PER_CALL}"
+                ),
             );
         }
     }
@@ -492,6 +495,21 @@ limits: {memory_mb: 128}
             ("timer_ms: 3600000", "timer_ms: 3600001", false),
             ("default: 1000000, min: 0", "default: -1, min: 0", false),
             ("default: both", "default: none", false),
+            (
+                "pricing: {model: free}",
+                "limits: {cpu_ms_per_call: 49}",
+                false,
+            ),
+            (
+                "pricing: {model: free}",
+                "limits: {cpu_ms_per_call: 50}",
+                true,
+            ),
+            (
+                "pricing: {model: free}",
+                "limits: {cpu_ms_per_call: 1001}",
+                false,
+            ),
             (
                 "pricing: {model: free}",
                 "description: {en: \"Open interest\"}",

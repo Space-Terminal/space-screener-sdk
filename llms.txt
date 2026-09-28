@@ -19,17 +19,17 @@
 - Row: `Row::new(key).market_ref(&MarketRef::new(ex, Market::Futures, sym)).cell("col", value).cell("chg", Cell::signed(x)).rank(n).ttl_s(s)`; cells keys = manifest column keys; at most 10000 rows or 32 MiB per plugin: beyond either cap the host evicts the least recently updated rows (replace: true with more rows keeps the last ones of the batch) — sort and truncate yourself
 - `Series::new(mins(16))`: `push(ts, v)`, `value_at(ts)` = latest value at or before ts, `change_pct(now, mins(5))`; `secs/mins/hours` → ms; `params().f64_or/i64_or/bool_or/str`
 - `st dev` reinstall on every save restarts the plugin and wipes in-memory history; keep small durable state in kv
-- `st logs` has a debug line per on_timer: `wasm cpu … ms (limit …), wall … ms` — margin to the CPU limit
+- `st logs` gets `cpu … ms (… ms in host functions) of … ms, wall … ms` only when a call used ≥ 50 % of its CPU budget
 - `space_screener::oi::Collector::new().collect(now_ms)?` → open interest (one side, USD) of USDT perps (Hyperliquid USDC; no quote filtering needed) for binance, bybit, okx, bitget, gate, mexc, kucoin, hyperliquid; `Collector::only(&[..])` polls a subset of `oi::EXCHANGES` (rotate groups per call to keep calls short; then timer_ms < 60 s is fine); manifest `http` must spell out fapi.binance.com, api.bybit.com, app.okx.com, api.bitget.com, api.gateio.ws, contract.mexc.com, api-futures.kucoin.com, api.hyperliquid.xyz; Snapshot `is_complete()`/`summary()` ("binance 180/200"); items: canonical `symbol`, `native_symbol`
 - Binance OI is per symbol and fapi.binance.com is capped at 5 req/s by the terminal: N symbols ≈ N/5 s; the collector takes the top 200 by 24h volume (`set_binance_top_n(n)`, 1..=600, 600 = all)
 
 ## Manifest
 - Required: `abi: 1`, `id` (^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$, not `install`, no con/prn/aux/nul/com1-9/lpt1-9 segment between dots), `version` (semver), `name {ru,en}`, `lang: rust`, `min_terminal: 0.104.70`
-- `http: [bare.host.names]` (every host called; no IP literals, no localhost), `timer_ms` (250..=3600000), `columns [{key, type, title{ru,en}, sort?: asc|desc, width?}]`, `params [{key, type, title, default, min?, max?, options?}]`, `limits {memory_mb ≤64, cpu_ms_per_call ≤1000}`, `history?: [cluster, replay]`, `feeds: []` (v1)
+- `http: [bare.host.names]` (every host called; no IP literals, no localhost), `timer_ms` (250..=3600000), `columns [{key, type, title{ru,en}, sort?: asc|desc, width?}]`, `params [{key, type, title, default, min?, max?, options?}]`, `limits {memory_mb ≤64, cpu_ms_per_call 50..=1000}`, `history?: [cluster, replay]`, `feeds: []` (v1)
 - Column types: text number integer percent usd price time duration countdown symbol exchange exchanges bool; param types: number integer bool text select
 
 ## Limits and pitfalls
-- 64 MB memory; cpu_ms_per_call = real CPU time of the plugin thread (default 250, max 1000; host-function time and preemption excluded), 3 overruns → stopped; endless-loop watchdog by wall time max(5×budget, 5 s); http timeout 1..10 s, body ≤8 MiB
+- 64 MB memory; cpu_ms_per_call (default 250, 50–1000) = plugin thread CPU for the whole call, wasm + host work for it (JSON, kv, rows), network wait free; past budget the next host call aborts; pure wasm loop cancelled after max(5×budget, 5 s) wall outside host functions; overrun/abort/runaway/600 s wall timeout = violation, 3 in last 10 calls → `limit`; http timeout 1..10 s, body ≤8 MiB
 - One call including HTTP waits must finish within 600 s wall; Binance per-symbol round ≈ N/5 s
 - No std::time/fs/net/thread, no println (use info!), no wasm-bindgen deps (getrandom js, chrono wasmbind); extism-pdk logging/http imports are refused; start section and `_start`/`_initialize`/`__wasm_call_ctors`/`hs_init` exports are refused (forbidden_export)
 - HTTP: https only, no redirects (3xx returned as is), no user info in URLs, timeout_ms 1000..=10000, body ≤ 8 MiB, http_batch bodies ≤ 48 MiB in total; rows ≤ 16 KiB each, ≤ 32 MiB in total

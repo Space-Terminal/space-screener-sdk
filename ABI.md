@@ -52,7 +52,7 @@ columns:                                # table columns, in display order
 params:                                 # user-editable parameters
   - {key: min_oi, type: number, title: {en: "Min OI, $"}, default: 5000000, min: 0}
   - {key: side, type: select, title: {en: "Side"}, default: both, options: [both, long, short]}
-limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional
+limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional; cpu_ms_per_call 50..=1000
 ```
 
 - `id` matches `^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$` (3..64 chars, starts and ends with a letter or digit),
@@ -214,10 +214,8 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 | Limit | Value |
 |---|---|
 | Memory | `limits.memory_mb`, at most 64 MB |
-| CPU per call | `limits.cpu_ms_per_call` (default 250, at most 1000): the real CPU time of the plugin's thread, without time inside host functions (HTTP waits) and without time the OS gives to other threads. `init` gets 2000 ms |
-| Endless loops | a watchdog stops a call that stays in wasm longer than max(5 × budget, 5 s) of wall time |
+| CPU per call | `limits.cpu_ms_per_call` (default 250, allowed 50–1000) of the plugin thread's CPU time for the whole call, wasm plus host work done for it (JSON, kv, rows); waiting for the network costs nothing. Once the budget is spent, the next host call aborts the call. A pure wasm loop with no host calls is cancelled after `max(5 × budget, 5 s)` wall time outside host functions. Going over the budget, an abort, a runaway cancel and the 600 s wall timeout each count as a violation; 3 violations in the last 10 calls stop the plugin (`limit`). A call that used at least 50 % of its budget writes `cpu … ms (… ms in host functions) of … ms, wall … ms` to the screener log. |
 | Wall time per call | 600 s: one call, HTTP waits included, must finish within it; a round of N requests to `fapi.binance.com` takes about N/5 s |
-| Violations | 3 CPU overruns in a row stop the plugin (pane status "limit exceeded") |
 | After a trap | the terminal recreates the plugin and calls `init` again; in-memory state is lost, `kv` survives |
 | `screener.wasm` | at most 10 MiB |
 | HTTP | `timeout_ms` 1000..=10000; body ≤ 8 MiB per response, ≤ 48 MiB per `http_batch` |

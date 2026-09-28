@@ -29,8 +29,8 @@ and HTTP, and hands rows back. The full wire contract is `ABI.md` in the SDK rep
    in the background. Every reinstall restarts the plugin and wipes its in-memory state, so 5/15-minute
    windows start over after each save; keep small state that must survive in `kv_set`.
 6. **Check.** `st rows` (what the pane shows; `--json` prints the terminal's response as is:
-   `{ok, version, status, status_text?, rows}`), `st logs` (plugin log; after every `on_timer` it has a
-   debug line `wasm cpu … ms (limit …), wall … ms` — the margin to the CPU limit), `st list`
+   `{ok, version, status, status_text?, rows}`), `st logs` (plugin log; a call that used ≥ 50 % of its
+   CPU budget adds `cpu … ms (… ms in host functions) of … ms, wall … ms`), `st list`
    (status: running / stopped / error / limit). Iterate until rows look right, then tell the user to
    look at the pane and click a row.
 
@@ -152,7 +152,7 @@ columns:
   - {key: chg5, type: percent, title: {en: "OI 5m"}}
 params:
   - {key: min_oi, type: number, title: {en: "Min OI, $"}, default: 5000000, min: 0}
-limits: {cpu_ms_per_call: 1000}  # parse-heavy screeners (default 250 ms of wasm CPU per call)
+limits: {cpu_ms_per_call: 1000}  # parse-heavy screeners (default 250 ms of CPU per call, allowed 50–1000)
 ```
 
 Column types: `text number integer percent usd price time duration countdown symbol exchange exchanges bool`.
@@ -166,11 +166,13 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 
 ## Limits
 
-- 64 MB memory. CPU: the host measures the real CPU time of the plugin's thread — time inside host
-  functions (HTTP waits) and time the OS gives to other threads do not count. Budget
-  `limits.cpu_ms_per_call`: default 250, max 1000; 3 overruns in a row stop the plugin (status `limit`).
-  A separate watchdog stops a call stuck in an endless loop by wall time: max(5 × budget, 5 s) spent in
-  wasm. `http` timeout 1..10 s, responses ≤ 8 MiB.
+- 64 MB memory. CPU budget `limits.cpu_ms_per_call` (default 250, allowed 50–1000) counts the plugin
+  thread's CPU for the whole call — wasm plus host work done for it (JSON, kv, rows); waiting for the
+  network is free. Past the budget the next host call aborts the call; a pure wasm loop is cancelled
+  after max(5 × budget, 5 s) wall time outside host functions. Overrun, abort, runaway cancel and the
+  600 s wall timeout are violations; 3 in the last 10 calls stop the plugin (status `limit`). Calls using
+  ≥ 50 % of the budget log `cpu … ms (… ms in host functions) of … ms, wall … ms`. `http` timeout
+  1..10 s, responses ≤ 8 MiB.
 - One call (`on_timer` with all its HTTP waits) must finish within 600 s of wall time. Budget
   per-symbol rounds: `fapi.binance.com` allows 5 requests/s, so N symbols ≈ N/5 s.
 - After a crash the terminal restarts the plugin (`init` again): in-memory history is lost, `kv` stays.
@@ -188,7 +190,7 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | status 301/302 with an empty body | redirects are not followed; call the final URL directly |
 | `bad_request` on http | only `https://`, no `user:pass@` in the URL, `timeout_ms` 1000..=10000 |
 | `forbidden_export` / start section | build a `cdylib` for wasm32-unknown-unknown with `st build`; WASI/C runtimes (`_start`, `_initialize`) are refused |
-| `limit` status / cpu overrun | parse only the fields you need (`#[derive(Deserialize)]` structs, not `serde_json::Value`), raise `limits.cpu_ms_per_call`, cache slow-changing metadata |
+| `limit` status / cpu overrun | host work for your calls counts too: parse only the fields you need (`#[derive(Deserialize)]` structs, not `serde_json::Value`), emit fewer/smaller rows, raise `limits.cpu_ms_per_call`, cache slow-changing metadata |
 | slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints or rotate groups of exchanges (exchange rate limits are shared with the user's trading IP; `fapi.binance.com` is capped at 5 requests/s) |
 | history (5/15 min changes) resets | every `st dev` reinstall and every crash restarts the plugin; windows fill again from scratch |
 | clicks feel slow | do not export `on_click` unless needed — without it the terminal opens the row's market at once |
