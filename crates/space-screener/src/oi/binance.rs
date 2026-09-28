@@ -88,7 +88,7 @@ pub fn parse_ticker_24h(body: &str) -> Result<HashMap<String, Day>> {
     Ok(items.into_iter().map(|i| (i.symbol, i.day)).collect())
 }
 
-/// The `top_n` perpetuals by 24h quote volume (`0` = all) that have 24h statistics.
+/// At most `top_n` perpetuals by 24h quote volume, among those that have 24h statistics.
 pub fn select_top<'a>(
     symbols: &'a [PerpSymbol],
     days: &HashMap<String, Day>,
@@ -99,9 +99,7 @@ pub fn select_top<'a>(
         .filter_map(|s| Some((s, days.get(&s.symbol)?.quote_volume)))
         .collect();
     ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
-    if top_n > 0 {
-        ranked.truncate(top_n);
-    }
+    ranked.truncate(top_n);
     ranked.into_iter().map(|(s, _)| s).collect()
 }
 

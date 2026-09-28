@@ -49,6 +49,9 @@ const METADATA_TTL_MS: i64 = hours(1);
 
 /// Binance symbols polled per round by default: top by 24h quote volume.
 pub const BINANCE_TOP_N: usize = 200;
+/// Upper bound of the Binance top: 600 symbols ≈ 120 s at 5 requests/s, which covers every
+/// USDT perpetual and stays well inside the 600 s wall limit of one plugin call.
+pub const BINANCE_TOP_N_MAX: usize = 600;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenInterest {
@@ -164,7 +167,8 @@ enum Slot {
 ///
 /// Binance needs one request per symbol, and the terminal allows 5 requests/s to
 /// `fapi.binance.com`, so a round of N Binance symbols takes about N/5 s. Only the top
-/// [`BINANCE_TOP_N`] by 24h volume are polled unless [`Collector::set_binance_top_n`] says otherwise.
+/// [`BINANCE_TOP_N`] by 24h volume are polled unless [`Collector::set_binance_top_n`] says otherwise
+/// (1..=[`BINANCE_TOP_N_MAX`]).
 pub struct Collector {
     exchanges: Vec<&'static str>,
     binance_top_n: usize,
@@ -196,14 +200,15 @@ impl Collector {
         }
     }
 
-    /// `0` polls every Binance USDT perpetual.
+    /// Clamped to 1..=[`BINANCE_TOP_N_MAX`]; the maximum covers every Binance USDT perpetual.
     pub fn with_binance_top_n(mut self, top_n: usize) -> Self {
-        self.binance_top_n = top_n;
+        self.set_binance_top_n(top_n);
         self
     }
 
+    /// Clamped to 1..=[`BINANCE_TOP_N_MAX`].
     pub fn set_binance_top_n(&mut self, top_n: usize) {
-        self.binance_top_n = top_n;
+        self.binance_top_n = top_n.clamp(1, BINANCE_TOP_N_MAX);
     }
 
     fn wants(&self, slug: &str) -> bool {
@@ -245,8 +250,9 @@ impl Collector {
         reqs
     }
 
-    /// One round: returns a snapshot per exchange in [`EXCHANGES`] order.
-    /// `Err` only when the host refused the batch itself.
+    /// One round: returns a snapshot per exchange in [`EXCHANGES`] order; a failure of one exchange,
+    /// including a refused per-symbol batch, stays in its snapshot.
+    /// `Err` only when the host refused the shared bulk batch, which carries every exchange.
     pub fn collect(&mut self, now_ms: i64) -> Result<Vec<Snapshot>> {
         let (slots, reqs): (Vec<Slot>, Vec<HttpRequest>) =
             self.bulk_requests(now_ms).into_iter().unzip();
@@ -282,7 +288,7 @@ impl Collector {
         for &exchange in &self.exchanges {
             let result = match exchange {
                 binance::SLUG => {
-                    out.push(self.collect_binance(take(Slot::BinanceTicker))?);
+                    out.push(self.collect_binance(take(Slot::BinanceTicker)));
                     continue;
                 }
                 bybit::SLUG => take(Slot::Bybit).and_then(|b| bybit::parse(&b)),
@@ -304,8 +310,7 @@ impl Collector {
         Ok(out)
     }
 
-    /// `Err` only when the host refused the per-symbol batch itself.
-    fn collect_binance(&self, ticker: Result<String>) -> Result<Snapshot> {
+    fn collect_binance(&self, ticker: Result<String>) -> Snapshot {
         let prepared = self
             .binance_symbols
             .as_ref()
@@ -316,17 +321,29 @@ impl Collector {
             });
         let (symbols, days) = match prepared {
             Ok(prepared) => prepared,
-            Err(e) => return Ok(Snapshot::bulk(binance::SLUG, Err(e))),
+            Err(e) => return Snapshot::bulk(binance::SLUG, Err(e)),
         };
         let wanted = binance::select_top(symbols, &days, self.binance_top_n);
         let reqs: Vec<HttpRequest> = wanted
             .iter()
             .map(|s| binance::open_interest_request(&s.symbol))
             .collect();
+        let responses = match host::http_batch(&reqs) {
+            Ok(responses) => responses,
+            Err(e) => {
+                return Snapshot {
+                    exchange: binance::SLUG,
+                    result: Err(e),
+                    requested: reqs.len(),
+                    failed: reqs.len(),
+                    first_error: None,
+                };
+            }
+        };
         let mut failed = 0;
         let mut first_error = None;
         let mut ois = Vec::with_capacity(reqs.len());
-        for resp in host::http_batch(&reqs)? {
+        for resp in responses {
             match body(resp).and_then(|b| binance::parse_open_interest(&b)) {
                 Ok(oi) => ois.push(oi),
                 Err(e) => {
@@ -342,13 +359,13 @@ impl Collector {
                 Ok(binance::assemble(symbols, &days, ois))
             }
         };
-        Ok(Snapshot {
+        Snapshot {
             exchange: binance::SLUG,
             result,
             requested: reqs.len(),
             failed,
             first_error,
-        })
+        }
     }
 }
 
@@ -382,5 +399,30 @@ mod tests {
 
         let failed = Snapshot::bulk(mexc::SLUG, Err(Error::parse("x")));
         assert_eq!(failed.summary(), "mexc: no data");
+    }
+
+    #[test]
+    fn binance_top_n_is_clamped() {
+        assert_eq!(Collector::new().with_binance_top_n(0).binance_top_n, 1);
+        assert_eq!(
+            Collector::new().with_binance_top_n(10_000).binance_top_n,
+            BINANCE_TOP_N_MAX
+        );
+    }
+
+    // Natively every host call fails, which is exactly a refused per-symbol batch.
+    #[test]
+    fn refused_binance_batch_stays_in_its_snapshot() {
+        let info = include_str!("../../tests/fixtures/binance_exchange_info.json");
+        let ticker = include_str!("../../tests/fixtures/binance_ticker_24hr.json");
+        let mut collector = Collector::new();
+        collector.binance_symbols = Some(Cached {
+            at_ms: 0,
+            value: binance::parse_exchange_info(info).unwrap(),
+        });
+        let snapshot = collector.collect_binance(Ok(ticker.to_string()));
+        assert!(snapshot.result.is_err());
+        assert_eq!((snapshot.requested, snapshot.failed), (2, 2));
+        assert_eq!(snapshot.summary(), "binance 0/2");
     }
 }

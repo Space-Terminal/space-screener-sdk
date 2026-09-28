@@ -28,5 +28,5 @@ params:
   - {key: min_oi, type: number, title: {ru: "Мин. OI, $", en: "Min OI, $"}, default: 5000000, min: 0}
   - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 500, min: 1, max: 5000}
   - {key: alert_pct, type: number, title: {ru: "Алерт при |OI 5м| ≥, %", en: "Alert when |OI 5m| ≥, %"}, default: 0, min: 0, max: 100}
-  - {key: binance_top_n, type: integer, title: {ru: "Binance: топ по объёму (0 — все)", en: "Binance: top by volume (0 = all)"}, default: 200, min: 0, max: 1000}
+  - {key: binance_top_n, type: integer, title: {ru: "Binance: топ по объёму (600 — все)", en: "Binance: top by volume (600 = all)"}, default: 200, min: 1, max: 600}
 limits: {cpu_ms_per_call: 1000}

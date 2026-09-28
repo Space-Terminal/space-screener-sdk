@@ -30,7 +30,7 @@ fn binance_keeps_trading_usdt_perpetuals_and_prices_them() {
         .map(|s| s.symbol.as_str())
         .collect();
     assert_eq!(top, ["BTCUSDT"]);
-    assert_eq!(binance::select_top(&symbols, &days, 0).len(), 2);
+    assert_eq!(binance::select_top(&symbols, &days, 600).len(), 2);
 
     let oi = binance::parse_open_interest(&fixture("binance_open_interest.json")).unwrap();
     assert_eq!(oi, ("BTCUSDT".to_string(), 93294.408));

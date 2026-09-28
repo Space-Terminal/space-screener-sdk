@@ -200,7 +200,7 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 |---|---|
 | Memory | `limits.memory_mb`, at most 64 MB |
 | CPU per call | `limits.cpu_ms_per_call` (default 250, at most 1000) of wasm time; time spent inside host functions (HTTP) does not count. `init` gets 2000 ms |
-| Wall time per call | 120 s safety net |
+| Wall time per call | 600 s: one call, HTTP waits included, must finish within it; a round of N requests to `fapi.binance.com` takes about N/5 s |
 | Violations | 3 CPU overruns in a row stop the plugin (pane status "limit exceeded") |
 | After a trap | the terminal recreates the plugin and calls `init` again; in-memory state is lost, `kv` survives |
 | `screener.wasm` | at most 10 MiB |

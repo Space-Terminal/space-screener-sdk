@@ -40,7 +40,7 @@ impl Screener for OiScreener {
         let min_oi = params.f64_or("min_oi", 5_000_000.0);
         let limit = params.i64_or("limit", 500).max(1) as usize;
         let alert_pct = params.f64_or("alert_pct", 0.0);
-        let binance_top_n = params.i64_or("binance_top_n", BINANCE_TOP_N as i64).max(0) as usize;
+        let binance_top_n = params.i64_or("binance_top_n", BINANCE_TOP_N as i64).max(1) as usize;
         self.collector.set_binance_top_n(binance_top_n);
 
         let mut incomplete = Vec::new();

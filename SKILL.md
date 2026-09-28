@@ -121,7 +121,8 @@ Helpers:
 - Binance has no bulk open interest: one request per symbol, and the terminal allows 5 requests/s to
   `fapi.binance.com`, so a round of N symbols takes about N/5 s (200 → 40 s). The collector polls the
   top `BINANCE_TOP_N` = 200 USDT perpetuals by 24h volume; change it with
-  `collector.set_binance_top_n(n)` (`0` = all ≈ 530 symbols ≈ 2 min). Keep `timer_ms` ≥ 60000.
+  `collector.set_binance_top_n(n)`, n in 1..=600 (600 covers every USDT perpetual, ≈ 2 min).
+  Keep `timer_ms` ≥ 60000.
 
 ## Manifest essentials
 
@@ -157,6 +158,8 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 
 - 64 MB memory; `cpu_ms_per_call` of wasm CPU per call (default 250, max 1000; HTTP waiting does not
   count); 3 overruns in a row stop the plugin. `http` timeout ≤ 10 s, responses ≤ 8 MiB.
+- One call (`on_timer` with all its HTTP waits) must finish within 600 s of wall time. Budget
+  per-symbol rounds: `fapi.binance.com` allows 5 requests/s, so N symbols ≈ N/5 s.
 - After a crash the terminal restarts the plugin (`init` again): in-memory history is lost, `kv` stays.
 
 ## Pitfalls in wasm
