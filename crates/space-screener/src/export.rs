@@ -18,8 +18,12 @@ pub struct Init {
 ///
 /// Export it with [`export_screener!`](crate::export_screener). The terminal calls
 /// `init` once per (re)start, `on_timer` every `timer_ms` after the previous call
-/// returned, `on_click` when the user clicks a row and `on_params` when the user
-/// changes parameters. `params()` always returns the current parameters.
+/// returned and `on_params` when the user changes parameters. `params()` always
+/// returns the current parameters.
+///
+/// Clicks: with `export_screener!(T)` the terminal opens the clicked row's market
+/// itself, immediately. Only `export_screener!(T, on_click)` routes clicks to
+/// [`Screener::on_click`]; such clicks wait while `on_timer` runs, so keep rounds short.
 pub trait Screener: Default + Send + 'static {
     fn init(&mut self, _init: &Init) -> ScreenerResult {
         Ok(())
@@ -27,6 +31,7 @@ pub trait Screener: Default + Send + 'static {
 
     fn on_timer(&mut self, now_ms: i64) -> ScreenerResult;
 
+    /// Called only when exported with `export_screener!(T, on_click)`.
     /// Default: open the clicked row's market (`symbol`, `exchange`, `market` of the row).
     fn on_click(&mut self, click: &Click) -> ScreenerResult {
         if let Some(market) = click.market_ref() {
@@ -153,7 +158,11 @@ pub mod __private {
     }
 }
 
-/// Exports a [`Screener`] type as the plugin entry points (`init`, `on_timer`, `on_click`, `on_params`).
+/// Exports a [`Screener`] type as the plugin entry points `init`, `on_timer`, `on_params`.
+///
+/// `export_screener!(MyScreener, on_click)` also exports `on_click`, routing row clicks to
+/// [`Screener::on_click`]. Without it the terminal opens the clicked row's market itself,
+/// right away; with it clicks wait for a running `on_timer`.
 ///
 /// ```ignore
 /// #[derive(Default)]
@@ -163,7 +172,7 @@ pub mod __private {
 /// ```
 #[macro_export]
 macro_rules! export_screener {
-    ($screener:ty) => {
+    (@export $screener:ty, $($on_click:ident)?) => {
         #[cfg(target_arch = "wasm32")]
         const _: () = {
             static STATE: $crate::__private::StateMutex<::core::option::Option<$screener>> =
@@ -180,15 +189,23 @@ macro_rules! export_screener {
             }
 
             #[unsafe(no_mangle)]
-            pub extern "C" fn on_click() -> i32 {
-                $crate::__private::run(|input| $crate::__private::on_click(&STATE, input))
-            }
-
-            #[unsafe(no_mangle)]
             pub extern "C" fn on_params() -> i32 {
                 $crate::__private::run(|input| $crate::__private::on_params(&STATE, input))
             }
+
+            $(
+                #[unsafe(no_mangle)]
+                pub extern "C" fn $on_click() -> i32 {
+                    $crate::__private::run(|input| $crate::__private::on_click(&STATE, input))
+                }
+            )?
         };
+    };
+    ($screener:ty) => {
+        $crate::export_screener!(@export $screener,);
+    };
+    ($screener:ty, on_click) => {
+        $crate::export_screener!(@export $screener, on_click);
     };
 }
 
