@@ -1,0 +1,111 @@
+{
+ "success": true,
+ "code": 0,
+ "data": [
+  {
+   "contractId": 10,
+   "symbol": "BTC_USDT",
+   "lastPrice": 83893.5,
+   "bid1": 83893.5,
+   "ask1": 83893.6,
+   "volume24": 376551627,
+   "amount24": 3145849818.2553,
+   "holdVol": 515344711,
+   "lower24Price": 82502.4,
+   "high24Price": 84966.1,
+   "riseFallRate": 0.0066,
+   "riseFallValue": 553.8,
+   "indexPrice": 83931.1,
+   "fairPrice": 83893.6,
+   "fundingRate": 5.6e-05,
+   "maxBidPrice": 92324.2,
+   "minAskPrice": 75537.9,
+   "timestamp": 1790617695746,
+   "riseFallRates": {
+    "zone": "UTC+8",
+    "r": 0.0066,
+    "v": 553.8,
+    "r7": -0.0231,
+    "r30": 0.0779,
+    "r90": 0.4376,
+    "r180": 0.218,
+    "r365": -0.2372
+   },
+   "riseFallRatesOfTimezone": [
+    -0.0059,
+    -0.0063,
+    0.0066
+   ]
+  },
+  {
+   "contractId": 11,
+   "symbol": "ETH_USDT",
+   "lastPrice": 2697.23,
+   "bid1": 2697.23,
+   "ask1": 2697.24,
+   "volume24": 68245389,
+   "amount24": 1822016189.9495,
+   "holdVol": 83236515,
+   "lower24Price": 2634,
+   "high24Price": 2719.99,
+   "riseFallRate": 0.0074,
+   "riseFallValue": 19.83,
+   "indexPrice": 2698.17,
+   "fairPrice": 2697.24,
+   "fundingRate": 9.3e-05,
+   "maxBidPrice": 3237.8,
+   "minAskPrice": 2158.53,
+   "timestamp": 1790617695746,
+   "riseFallRates": {
+    "zone": "UTC+8",
+    "r": 0.0074,
+    "v": 19.83,
+    "r7": -0.0206,
+    "r30": 0.1038,
+    "r90": 0.7239,
+    "r180": 0.2639,
+    "r365": -0.329
+   },
+   "riseFallRatesOfTimezone": [
+    0.0043,
+    0.0036,
+    0.0074
+   ]
+  },
+  {
+   "contractId": 1104,
+   "symbol": "BTC_USDC",
+   "lastPrice": 83860.1,
+   "bid1": 83866.7,
+   "ask1": 83866.8,
+   "volume24": 4748675,
+   "amount24": 39638894.64722,
+   "holdVol": 30736340,
+   "lower24Price": 82534.8,
+   "high24Price": 84952,
+   "riseFallRate": 0.0061,
+   "riseFallValue": 515.5,
+   "indexPrice": 83901,
+   "fairPrice": 83864.9,
+   "fundingRate": 8.3e-05,
+   "maxBidPrice": 92291.1,
+   "minAskPrice": 75510.9,
+   "timestamp": 1790617695917,
+   "riseFallRates": {
+    "zone": "UTC+8",
+    "r": 0.0061,
+    "v": 515.5,
+    "r7": -0.0236,
+    "r30": 0.0776,
+    "r90": 0.4391,
+    "r180": 0.2174,
+    "r365": -0.2379
+   },
+   "riseFallRatesOfTimezone": [
+    -0.0059,
+    -0.0065,
+    0.0061
+   ]
+  }
+ ]
+}
