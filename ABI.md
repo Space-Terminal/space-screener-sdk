@@ -215,6 +215,7 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 |---|---|
 | Memory | `limits.memory_mb`, at most 64 MB |
 | CPU per call | `limits.cpu_ms_per_call` (default 250, allowed 50–1000) of the plugin thread's CPU time for the whole call, wasm plus host work done for it (JSON, kv, rows); waiting for the network costs nothing. Once the budget is spent, the next host call aborts the call. A pure wasm loop with no host calls is cancelled after `max(5 × budget, 5 s)` wall time outside host functions. Going over the budget, an abort, a runaway cancel and the 600 s wall timeout each count as a violation; 3 violations in the last 10 calls stop the plugin (`limit`). A call that used at least 50 % of its budget writes `cpu … ms (… ms in host functions) of … ms, wall … ms` to the screener log. |
+| CPU share | besides the per-call budget, a plugin may use at most 30 s of CPU (half a core) over any sliding 60 s window, counted from the full CPU of every call that ended in it, including aborted and cancelled ones; above that the plugin stops with status `limit` ("average CPU over 50 % of a core"). |
 | Wall time per call | 600 s: one call, HTTP waits included, must finish within it; a round of N requests to `fapi.binance.com` takes about N/5 s |
 | After a trap | the terminal recreates the plugin and calls `init` again; in-memory state is lost, `kv` survives |
 | `screener.wasm` | at most 10 MiB |

@@ -29,7 +29,7 @@
 - Column types: text number integer percent usd price time duration countdown symbol exchange exchanges bool; param types: number integer bool text select
 
 ## Limits and pitfalls
-- 64 MB memory; cpu_ms_per_call (default 250, 50–1000) = plugin thread CPU for the whole call, wasm + host work for it (JSON, kv, rows), network wait free; past budget the next host call aborts; pure wasm loop cancelled after max(5×budget, 5 s) wall outside host functions; overrun/abort/runaway/600 s wall timeout = violation, 3 in last 10 calls → `limit`; http timeout 1..10 s, body ≤8 MiB
+- 64 MB memory; cpu_ms_per_call (default 250, 50–1000) = plugin thread CPU for the whole call, wasm + host work for it (JSON, kv, rows), network wait free; past budget the next host call aborts; pure wasm loop cancelled after max(5×budget, 5 s) wall outside host functions; overrun/abort/runaway/600 s wall timeout = violation, 3 in last 10 calls → `limit`; CPU share ≤ 30 s per sliding 60 s (half a core, all calls incl. aborted) else `limit`; http timeout 1..10 s, body ≤8 MiB
 - One call including HTTP waits must finish within 600 s wall; Binance per-symbol round ≈ N/5 s
 - No std::time/fs/net/thread, no println (use info!), no wasm-bindgen deps (getrandom js, chrono wasmbind); extism-pdk logging/http imports are refused; start section and `_start`/`_initialize`/`__wasm_call_ctors`/`hs_init` exports are refused (forbidden_export)
 - HTTP: https only, no redirects (3xx returned as is), no user info in URLs, timeout_ms 1000..=10000, body ≤ 8 MiB, http_batch bodies ≤ 48 MiB in total; rows ≤ 16 KiB each, ≤ 32 MiB in total

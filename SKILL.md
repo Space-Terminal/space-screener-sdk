@@ -173,6 +173,9 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
   600 s wall timeout are violations; 3 in the last 10 calls stop the plugin (status `limit`). Calls using
   ≥ 50 % of the budget log `cpu … ms (… ms in host functions) of … ms, wall … ms`. `http` timeout
   1..10 s, responses ≤ 8 MiB.
+- CPU share: at most 30 s of CPU (half a core) over any sliding 60 s window, summed over every call that
+  ended in it (aborted and cancelled ones too); above that the plugin stops with `limit` ("average CPU
+  over 50 % of a core"). A short `timer_ms` with heavy parsing hits this first.
 - One call (`on_timer` with all its HTTP waits) must finish within 600 s of wall time. Budget
   per-symbol rounds: `fapi.binance.com` allows 5 requests/s, so N symbols ≈ N/5 s.
 - After a crash the terminal restarts the plugin (`init` again): in-memory history is lost, `kv` stays.
