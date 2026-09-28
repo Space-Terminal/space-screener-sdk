@@ -46,12 +46,15 @@ pub const USER_ALLOWED: &[&str] = &[
 ];
 
 pub const REQUIRED_EXPORTS: &[&str] = &["init", "on_timer"];
+/// Entry points that would run code at instantiation, outside the terminal's call limits.
+pub const FORBIDDEN_EXPORTS: &[&str] = &["_start", "_initialize", "__wasm_call_ctors", "hs_init"];
 pub const MAX_WASM_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Default)]
 pub struct Module {
     pub imports: Vec<(String, String)>,
     pub exports: Vec<String>,
+    pub has_start: bool,
 }
 
 pub fn inspect(wasm: &[u8]) -> Result<Module> {
@@ -69,6 +72,7 @@ pub fn inspect(wasm: &[u8]) -> Result<Module> {
                         .push((import.module.to_string(), import.name.to_string()));
                 }
             }
+            Payload::StartSection { .. } => module.has_start = true,
             Payload::ExportSection(reader) => {
                 for export in reader {
                     module
@@ -101,6 +105,19 @@ pub fn check(wasm: &[u8], module: &Module) -> Vec<String> {
             problems.push(format!(
                 "forbidden_import: {module_name}::{name}{}",
                 hint(module_name, name)
+            ));
+        }
+    }
+    if module.has_start {
+        problems.push(
+            "forbidden_export: the module has a start section (code that runs at instantiation)"
+                .to_string(),
+        );
+    }
+    for export in &module.exports {
+        if FORBIDDEN_EXPORTS.contains(&export.as_str()) {
+            problems.push(format!(
+                "forbidden_export: `{export}` (a WASI/C runtime entry point; build a cdylib for wasm32-unknown-unknown)"
             ));
         }
     }
@@ -152,6 +169,30 @@ mod tests {
                 (func (export "on_timer") (result i32) i32.const 0))"#,
         );
         assert!(check(&wasm, &m).is_empty());
+    }
+
+    #[test]
+    fn start_section_and_runtime_entry_points_are_refused() {
+        let (wasm, m) = module(
+            r#"(module
+                (func $boot)
+                (start $boot)
+                (func (export "init") (result i32) i32.const 0)
+                (func (export "on_timer") (result i32) i32.const 0)
+                (func (export "_initialize"))
+                (func (export "__wasm_call_ctors")))"#,
+        );
+        let problems = check(&wasm, &m).join("\n");
+        for needle in [
+            "start section",
+            "forbidden_export: `_initialize`",
+            "forbidden_export: `__wasm_call_ctors`",
+        ] {
+            assert!(
+                problems.contains(needle),
+                "missing `{needle}` in:\n{problems}"
+            );
+        }
     }
 
     #[test]

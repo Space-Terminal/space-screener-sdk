@@ -99,7 +99,10 @@ pub fn init(dir: &Path, id: Option<String>, sdk_path: Option<PathBuf>) -> Result
         .to_string();
     let id = id.unwrap_or_else(|| default_id(&name));
     if !manifest::is_valid_id(&id) {
-        bail!("id `{id}` must match ^[a-z0-9][a-z0-9._-]{{2,63}}$ (pass --id author.name)");
+        bail!(
+            "id `{id}` must match {} (pass --id author.name)",
+            manifest::ID_RULE
+        );
     }
     let render = |template: &str| {
         template

@@ -151,21 +151,43 @@ pub fn parse(text: &str) -> Result<Manifest> {
     serde_yaml::from_str(text).context("invalid_manifest: manifest.yaml does not parse")
 }
 
+pub const ID_RULE: &str = "^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$, no segment between dots may be a \
+     Windows device name (con, prn, aux, nul, com1..com9, lpt1..lpt9)";
+
+// The id is a folder name on every OS, so Windows device names are refused in any dot segment.
+fn is_windows_device(segment: &str) -> bool {
+    matches!(segment, "con" | "prn" | "aux" | "nul")
+        || ["com", "lpt"].iter().any(|prefix| {
+            segment
+                .strip_prefix(prefix)
+                .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit() && n != "0")
+        })
+}
+
 pub fn is_valid_id(id: &str) -> bool {
     let bytes = id.as_bytes();
+    let edge = |b: &u8| b.is_ascii_lowercase() || b.is_ascii_digit();
     (3..=64).contains(&bytes.len())
-        && (bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit())
+        && bytes.first().is_some_and(edge)
+        && bytes.last().is_some_and(edge)
         && bytes
             .iter()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(b))
+        && !id.split('.').any(is_windows_device)
 }
 
-/// Mirrors the terminal: the host is trimmed and lower-cased before the check.
+/// Mirrors the terminal: the host is trimmed and lower-cased before the check; IP literals
+/// (all-numeric labels) and localhost are refused.
 fn is_valid_host(host: &str) -> bool {
     let host = host.trim().to_ascii_lowercase();
     !host.is_empty()
         && host.len() <= 253
         && host.contains('.')
+        && host != "localhost"
+        && !host.ends_with(".localhost")
+        && !host
+            .split('.')
+            .all(|label| label.bytes().all(|b| b.is_ascii_digit()))
         && host.split('.').all(|label| {
             !label.is_empty()
                 && label
@@ -182,7 +204,7 @@ pub fn validate(m: &Manifest) -> Report {
     if !is_valid_id(&m.id) {
         r.error(
             "invalid_manifest",
-            format!("id `{}` must match ^[a-z0-9][a-z0-9._-]{{2,63}}$", m.id),
+            format!("id `{}` must match {ID_RULE}", m.id),
         );
     }
     if semver::Version::parse(&m.version).is_err() {
@@ -217,7 +239,7 @@ pub fn validate(m: &Manifest) -> Report {
             r.error(
                 "invalid_manifest",
                 format!(
-                    "http host `{host}` must be a bare lowercase host name, like fapi.binance.com"
+                    "http host `{host}` must be a bare host name like fapi.binance.com (no scheme, port, IP address or localhost)"
                 ),
             );
         }
@@ -435,7 +457,7 @@ limits: {memory_mb: 128}
             "lang is required",
             "min_terminal is required",
             "unsupported_feed",
-            "bare lowercase host",
+            "bare host name",
             "timer_ms",
             "unknown type `money`",
             "declared twice",
@@ -496,9 +518,39 @@ limits: {memory_mb: 128}
     fn id_rules() {
         assert!(is_valid_id("ivan.vol-spike"));
         assert!(is_valid_id("0ab"));
+        assert!(is_valid_id("ivan.com10"));
+        assert!(is_valid_id("ivan.console"));
         assert!(!is_valid_id("ab"));
         assert!(!is_valid_id("-ab"));
+        assert!(!is_valid_id("ab-"));
+        assert!(!is_valid_id("ivan.oi."));
         assert!(!is_valid_id("Ab.c"));
         assert!(!is_valid_id(&"a".repeat(65)));
+        assert!(is_valid_id(&"a".repeat(64)));
+        for reserved in [
+            "con.oi",
+            "ivan.nul",
+            "ivan.com1.x",
+            "lpt9.screener",
+            "ivan.aux",
+        ] {
+            assert!(!is_valid_id(reserved), "{reserved}");
+        }
+    }
+
+    #[test]
+    fn http_hosts_refuse_ip_literals_and_localhost() {
+        assert!(is_valid_host("fapi.binance.com"));
+        assert!(is_valid_host("api-1.example.io"));
+        for bad in [
+            "127.0.0.1",
+            "10.1",
+            "localhost",
+            "app.localhost",
+            "[::1]",
+            "fapi.binance.com:443",
+        ] {
+            assert!(!is_valid_host(bad), "{bad}");
+        }
     }
 }

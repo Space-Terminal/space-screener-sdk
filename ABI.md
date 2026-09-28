@@ -26,11 +26,17 @@ The terminal rejects a module (`forbidden_import`) that imports anything outside
 Extism's own `http_request`, `log_*`, `get_log_level` and any `wasi_*` import are refused. With the
 Rust PDK use `extism-pdk = { version = "1.4.1", default-features = false }` (the PDK crate already does).
 
+### Refused exports
+
+Nothing may run at instantiation, outside the terminal's call limits: a module with a start section or
+an export named `_start`, `_initialize`, `__wasm_call_ctors` or `hs_init` is refused
+(`forbidden_export`). A Rust `cdylib` built for `wasm32-unknown-unknown` has none of them.
+
 ## Manifest (`manifest.yaml`)
 
 ```yaml
 abi: 1                                  # required
-id: author.oi-8-exchanges               # required, ^[a-z0-9][a-z0-9._-]{2,63}$
+id: author.oi-8-exchanges               # required, see below
 version: 0.1.0                          # required, semver
 name: {ru: "Открытый интерес", en: "Open interest"}   # required, at least one language
 description: {ru: "...", en: "..."}     # optional
@@ -49,6 +55,10 @@ params:                                 # user-editable parameters
 limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional
 ```
 
+- `id` matches `^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$` (3..64 chars, starts and ends with a letter or digit),
+  and no segment between dots is a Windows device name: `con`, `prn`, `aux`, `nul`, `com1`..`com9`,
+  `lpt1`..`lpt9` (`ivan.con` is refused, `ivan.console` is fine) — the id is a folder name on every OS.
+- `http` hosts are bare DNS names; IP literals and `localhost` are refused.
 - The first column with `sort` is the default sort of the pane.
 - `pricing`, `hosting`, `alerts` and other fields are ignored in v1.
 
@@ -136,10 +146,13 @@ HttpResponse {"status": 200, "headers": {"content-type": "application/json"}, "b
 ```
 
 - Only `https://` URLs whose host is listed in the manifest `http`; otherwise `host_not_allowed`.
+  URLs with user info (`https://user:pass@host/…`) are refused (`bad_request`).
+- Redirects are not followed: a 3xx response is returned to the plugin as is.
 - Headers `authorization`, `cookie`, `host` and `proxy-*` are refused (`forbidden_header`).
-- `timeout_ms` is at most 10000 (the default). A per-host quota waits within that timeout.
-- Response bodies are UTF-8 text (lossy), at most 8 MiB (`too_large`).
+- `timeout_ms` is 1000..=10000 (default 10000). A per-host quota waits within that timeout.
+- Response bodies are UTF-8 text (lossy), at most 8 MiB each (`too_large`).
 - `http_batch` runs up to 8 requests at a time with the same quotas; use it for per-symbol endpoints.
+  The bodies of one batch total at most 48 MiB; items past that get `too_large`.
 - `fapi.binance.com` is limited to 5 requests/s (its weight limit is shared with the user's trading IP):
   a batch of N requests there takes about N/5 s.
 - Traffic goes through the terminal's proxy routing and its own per-host quotas, separate from trading.
@@ -179,7 +192,8 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 ```
 
 - `emit_rows` upserts by `key` (≤ 128 chars); `replace: true` replaces the whole table. `expire` removes
-  rows. `ttl_s` removes a row that was not re-emitted in time. At most 5000 rows per plugin.
+  rows. `ttl_s` removes a row that was not re-emitted in time. At most 5000 rows per plugin, each at most
+  16 KiB as serialized JSON, 32 MiB of rows in total.
 - `symbol`, `exchange`, `market` make the row clickable: the default click opens that market.
 - `rank` (default 0): higher ranks stay above lower ones whatever the sort (pins, favourites).
 - A cell is a JSON number, string, bool or `null`, or `{"v": value, "tone"?: "pos"|"neg"|"muted"|"warn"|"accent", "text"?: "shown instead of v"}`.
@@ -204,6 +218,8 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 | Violations | 3 CPU overruns in a row stop the plugin (pane status "limit exceeded") |
 | After a trap | the terminal recreates the plugin and calls `init` again; in-memory state is lost, `kv` survives |
 | `screener.wasm` | at most 10 MiB |
+| HTTP | `timeout_ms` 1000..=10000; body ≤ 8 MiB per response, ≤ 48 MiB per `http_batch` |
+| Rows | ≤ 5000 rows, ≤ 16 KiB each (serialized), ≤ 32 MiB in total |
 
 ## Local API for tooling (`st`)
 
@@ -219,7 +235,7 @@ Errors are `{ok: false, error: <code>, message}`; a missing or wrong token gives
 | Route | Body / query | Response |
 |---|---|---|
 | `GET /api/v1/screeners` | — | `{ok, screeners: [{id, version, name: {ru, en}, dev, status, status_text?, rows, panes}]}`; status: `running`, `stopped`, `error`, `limit` |
-| `POST /api/v1/screeners/install` | `{manifest: "<yaml text>", wasm_b64, open_pane?: bool}` (≤ 32 MiB) | `{ok, id, version, running, pane: "exists"\|"opening"\|"none"}`; 400 `invalid_manifest`, `invalid_wasm`, `forbidden_import`, `unsupported_feed`, `terminal_too_old`, `too_large` |
+| `POST /api/v1/screeners/install` | `{manifest: "<yaml text>", wasm_b64, open_pane?: bool}` (≤ 32 MiB) | `{ok, id, version, running, pane: "exists"\|"opening"\|"none"}`; 400 `invalid_manifest`, `invalid_wasm`, `forbidden_import`, `forbidden_export`, `unsupported_feed`, `terminal_too_old`, `too_large` |
 | `POST /api/v1/screeners/{id}/reload` | — | `{ok, running}` |
 | `DELETE /api/v1/screeners/{id}` | — | `{ok}` |
 | `GET /api/v1/screeners/{id}/logs` | `?since=<seq>` (pass the previous `next`; 0 = from the start) | `{ok, lines: [{seq, ts_ms, level, msg}], next}` |

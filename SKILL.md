@@ -102,7 +102,7 @@ Row::new(format!("{exchange}:{symbol}"))                    // stable unique key
     .rank(1)                                                 // pinned above rank 0
 ```
 
-Every `cells` key must be a column `key` in the manifest. At most 5000 rows.
+Every `cells` key must be a column `key` in the manifest. At most 5000 rows, each ≤ 16 KiB of JSON.
 
 Symbols: put the canonical `BASEQUOTE` in upper case into rows and `MarketRef` (`BTCUSDT`, Hyperliquid
 `BTCUSDC`); the exchange's native symbol (`BTC-USDT-SWAP`, `BTC_USDT`) also works — the terminal
@@ -128,7 +128,7 @@ Helpers:
 
 ```yaml
 abi: 1
-id: author.oi-8-exchanges        # lowercase, [a-z0-9._-], 3..64
+id: author.oi-8-exchanges        # [a-z0-9._-], 3..64, starts/ends with a letter or digit; no con/prn/aux/nul/com1-9/lpt1-9 segment
 version: 0.1.0
 name: {ru: "Открытый интерес", en: "Open interest"}
 lang: rust
@@ -171,7 +171,10 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | `forbidden_import: …__wbindgen…` | a dependency pulls wasm-bindgen (`getrandom` with `js`, `chrono` `wasmbind`, `uuid` `js`): drop it |
 | `forbidden_import: extism:host/env::log_info` / `http_request` | extism-pdk used directly with default features; use `space_screener::{info!, http}` |
 | `println!` prints nothing | use `info!` and `st logs` |
-| `host_not_allowed` | add the exact host to manifest `http` |
+| `host_not_allowed` | add the exact host to manifest `http` (DNS names only: no IP addresses, no localhost) |
+| status 301/302 with an empty body | redirects are not followed; call the final URL directly |
+| `bad_request` on http | only `https://`, no `user:pass@` in the URL, `timeout_ms` 1000..=10000 |
+| `forbidden_export` / start section | build a `cdylib` for wasm32-unknown-unknown with `st build`; WASI/C runtimes (`_start`, `_initialize`) are refused |
 | `limit` status / cpu overrun | parse only the fields you need (`#[derive(Deserialize)]` structs, not `serde_json::Value`), raise `limits.cpu_ms_per_call`, cache slow-changing metadata |
 | slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints (exchange rate limits are shared with the user's trading IP; `fapi.binance.com` is capped at 5 requests/s) |
 | clicks feel slow | do not export `on_click` unless needed — without it the terminal opens the row's market at once |
