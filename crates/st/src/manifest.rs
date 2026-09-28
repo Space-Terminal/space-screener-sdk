@@ -176,24 +176,28 @@ pub fn is_valid_id(id: &str) -> bool {
         && !id.split('.').any(is_windows_device)
 }
 
-/// Mirrors the terminal: the host is trimmed and lower-cased before the check; IP literals
-/// (all-numeric labels) and localhost are refused.
+/// Mirrors the terminal: the host is trimmed and lower-cased before the check; a numeric TLD,
+/// an IP literal and localhost are refused.
 fn is_valid_host(host: &str) -> bool {
     let host = host.trim().to_ascii_lowercase();
+    let labels_ok = host.split('.').all(|label| {
+        !label.is_empty()
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    let numeric_tld = host
+        .rsplit('.')
+        .next()
+        .is_some_and(|tld| tld.bytes().all(|b| b.is_ascii_digit()));
     !host.is_empty()
         && host.len() <= 253
         && host.contains('.')
+        && labels_ok
+        && !numeric_tld
+        && host.parse::<std::net::IpAddr>().is_err()
         && host != "localhost"
         && !host.ends_with(".localhost")
-        && !host
-            .split('.')
-            .all(|label| label.bytes().all(|b| b.is_ascii_digit()))
-        && host.split('.').all(|label| {
-            !label.is_empty()
-                && label
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        })
 }
 
 pub fn validate(m: &Manifest) -> Report {
@@ -542,9 +546,11 @@ limits: {memory_mb: 128}
     fn http_hosts_refuse_ip_literals_and_localhost() {
         assert!(is_valid_host("fapi.binance.com"));
         assert!(is_valid_host("api-1.example.io"));
+        assert!(is_valid_host("api.1inch.io"));
         for bad in [
             "127.0.0.1",
             "10.1",
+            "api.123",
             "localhost",
             "app.localhost",
             "[::1]",
