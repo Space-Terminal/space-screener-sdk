@@ -83,7 +83,7 @@ so keep rounds short.
 | `symbols(exchange, market)` / `exchanges()` | symbol universe / exchanges the user connected (`connected: bool`) |
 | `replace_rows(rows)` / `emit_rows(rows)` / `expire(keys)` | replace the table / upsert by key / remove |
 | `set_status(StatusTone::Ok, "8/8 exchanges")` | short status line in the pane |
-| `alert(AlertLevel::Warn, title, body)` / `alert_row(…, key)` | toast + sound + notification (≤ 6/min) |
+| `alert(AlertLevel::Warn, title, body)` / `alert_row(…, key)` | toast + notification (≤ 6/min); `Warn`/`Urgent` also play a sound, `Info` is silent |
 | `open_market(&MarketRef)` / `open_spread(&a, &b, None)` | only inside `on_click` (needs `export_screener!(T, on_click)`) |
 | `kv_get::<T>(key)` / `kv_set(key, &v)` / `kv_delete(key)` | state that survives restarts, ≤ 1 MiB total |
 | `history_cluster(&req)` / `history_replay(&req)` | cloud history; needs `history: [cluster]` / `[replay]` in the manifest |

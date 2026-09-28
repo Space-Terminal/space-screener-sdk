@@ -201,8 +201,9 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 
 ### Alerts, status, opening markets
 
-- `emit_alert` shows a toast, plays the screener alert sound and adds a notification; at most 6 per
-  minute per plugin, the rest is dropped with a warning in the log.
+- `emit_alert` adds a notification and shows a toast. `info` is a quiet toast without sound; `warn` and
+  `urgent` also play the screener alert sound. At most 6 alerts per minute per plugin, the rest is
+  dropped with a warning in the log.
 - `set_status` sets the short status line of the pane.
 - `open_market` / `open_spread` work only inside `on_click`, once per click (`not_in_click` otherwise).
   Plain row clicks need neither: without an `on_click` export the terminal opens the row's market.
