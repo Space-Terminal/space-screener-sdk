@@ -38,7 +38,7 @@ lang: rust                              # required: rust | ts
 min_terminal: 0.104.70                  # required, semver; an older terminal refuses: terminal_too_old
 http: [fapi.binance.com, api.bybit.com] # exact host names http() may call, https only
 history: [cluster, replay]              # optional, cloud history access
-timer_ms: 60000                         # optional, >= 250, default 1000
+timer_ms: 60000                         # optional, 250..=3600000, default 1000
 feeds: []                               # reserved for v1.1; non-empty in v1 -> unsupported_feed
 columns:                                # table columns, in display order
   - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
@@ -84,11 +84,16 @@ non-zero status) is logged as an error and counted as a failure.
 |---|---|---|---|
 | `init` | yes | `{params: {key: value}, terminal: "0.104.70", lang: "ru"\|"en", now_ms}` | once per (re)start |
 | `on_timer` | yes | `{now_ms}` | every `timer_ms`, counted from the end of the previous call (calls never overlap) |
-| `on_click` | no | `{row: {key, symbol?, exchange?, market?}, column: string\|null, button: "left"\|"right"\|"middle", modifiers: {shift, ctrl, alt, logo}}` | the user clicked a row; without this export the terminal opens the row's market itself |
+| `on_click` | no | `{row: {key, symbol?, exchange?, market?}, column: string\|null, button: "left"\|"right"\|"middle", modifiers: {shift, ctrl, alt, logo}}` | the user clicked a row; without this export the terminal opens the row's market itself, immediately |
 | `on_params` | no | `{params}` | the user changed parameters; without this export the terminal restarts the plugin with a new `init` |
 | `on_batch` | — | reserved for v1.1 feeds | never called in v1 |
 
 `params` always carries every declared parameter (user value or `default`).
+
+Calls of one plugin never overlap: a click routed to `on_click` waits while `on_timer` runs. Export
+`on_click` only when the click needs custom logic, and keep `on_timer` rounds short; without the export
+the terminal opens the row's market at once. The Rust PDK exports `on_click` only with
+`export_screener!(T, on_click)`. A panic in the PDK is logged (message and location) before the trap.
 
 ## Host functions
 
@@ -135,15 +140,24 @@ HttpResponse {"status": 200, "headers": {"content-type": "application/json"}, "b
 - `timeout_ms` is at most 10000 (the default). A per-host quota waits within that timeout.
 - Response bodies are UTF-8 text (lossy), at most 8 MiB (`too_large`).
 - `http_batch` runs up to 8 requests at a time with the same quotas; use it for per-symbol endpoints.
+- `fapi.binance.com` is limited to 5 requests/s (its weight limit is shared with the user's trading IP):
+  a batch of N requests there takes about N/5 s.
 - Traffic goes through the terminal's proxy routing and its own per-host quotas, separate from trading.
 
 ### Tickers, symbols, exchanges
 
 - `exchange` is the terminal's exchange slug in lower case: `binance`, `bybit`, `okx`, `bitget`, `gate`,
   `mexc`, `kucoin`, `bingx`, `hyperliquid`, … `exchanges()` lists what the user has connected.
-- `market` is `spot` or `futures` (`forex`, `moex` also exist in the terminal).
+- `market` is `spot` or `futures`.
 - `tickers` returns the terminal's latest 24h snapshot; the first call for an exchange may wait up to
   10 s while the terminal fetches it. `change_pct` is in percent, `volume_quote` in the quote currency.
+- `tickers` and `symbols` give the terminal's own `symbol` plus `base` and `quote`.
+
+### Symbols in rows and `open_market`
+
+`symbol` of a row, of `open_market` and of `open_spread` legs is either the canonical `BASEQUOTE` in
+upper case — `BTCUSDT`, `ETHUSDC` (recommended) — or the exchange's native symbol (`BTC-USDT-SWAP`,
+`BTC_USDT`, `XBTUSDTM`). The terminal resolves both against the exchange's symbol list.
 
 ### History
 
@@ -177,6 +191,7 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
   minute per plugin, the rest is dropped with a warning in the log.
 - `set_status` sets the short status line of the pane.
 - `open_market` / `open_spread` work only inside `on_click`, once per click (`not_in_click` otherwise).
+  Plain row clicks need neither: without an `on_click` export the terminal opens the row's market.
   The terminal routes the market to the pane's link group or a new order book, like its own screeners.
 
 ## Limits

@@ -16,7 +16,7 @@ history) and shows their rows as a table pane; a click on a row opens the market
 ## Quick start
 
 ```sh
-cargo install --path crates/st
+cargo install --path crates/st      # from this checkout; st init links new projects to it
 st init my-screener --id me.my-screener
 cd my-screener
 st build          # installs the wasm32-unknown-unknown target on first use

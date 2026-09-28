@@ -12,11 +12,15 @@ and HTTP, and hands rows back. The full wire contract is `ABI.md` in the SDK rep
 
 ## Workflow
 
-1. **Tooling.** `st --version`. If missing: `cargo install --path <sdk>/crates/st` (local SDK checkout)
-   or `cargo install --git https://github.com/EvgeniiKobelev/space-screener-sdk st`.
-   `st build` installs the `wasm32-unknown-unknown` target through rustup on first use.
+1. **Tooling.** `st --version`. If missing, install it from a local SDK checkout:
+   `cargo install --path <sdk-checkout>/crates/st`. `st` built this way remembers where the SDK is, so
+   `st init` writes a path dependency on that checkout — this is the main scenario. Once the SDK repo is
+   published, `cargo install --git https://github.com/EvgeniiKobelev/space-screener-sdk st` will work too
+   (the URL does not work before publication). `st build` installs the `wasm32-unknown-unknown` target
+   through rustup on first use.
 2. **Scaffold.** `st init <folder> --id <author>.<name>` → `Cargo.toml`, `manifest.yaml`,
-   `src/lib.rs` (a working "top movers" starter). Work inside that folder.
+   `src/lib.rs` (a working "top movers" starter). Work inside that folder. `--sdk-path <sdk>/crates/space-screener`
+   points at another checkout.
 3. **Code.** Edit `src/lib.rs` (the screener) and `manifest.yaml` (id, columns, params, `http` hosts).
 4. **Build.** `st build` — compiles, writes `screener.wasm`, validates the manifest and wasm imports
    exactly like the terminal does. Fix every error it prints before going on.
@@ -53,14 +57,20 @@ impl Screener for MyScreener {
         replace_rows(rows)?;
         Ok(())
     }
-    // on_click: default opens the row's market; on_params: default does nothing (params() is live)
+    // on_params: default does nothing (params() is always current)
 }
 
 export_screener!(MyScreener);
 ```
 
 `on_timer` runs every `timer_ms` (from the end of the previous call). Errors returned from the trait
-methods are logged; use `?` freely — any `std::error::Error` converts.
+methods are logged; use `?` freely — any `std::error::Error` converts. A panic is logged with its
+message and location (`st logs`) before the terminal restarts the plugin.
+
+Clicks: rows with `symbol`/`exchange`/`market` open their order book on click — the terminal does it
+at once, no code needed. Only for custom click logic implement `on_click` and export with
+`export_screener!(MyScreener, on_click)`; such clicks wait while `on_timer` runs (calls never overlap),
+so keep rounds short.
 
 ## Host API (all return `space_screener::Result`, errors carry a `code()`)
 
@@ -73,7 +83,7 @@ methods are logged; use `?` freely — any `std::error::Error` converts.
 | `replace_rows(rows)` / `emit_rows(rows)` / `expire(keys)` | replace the table / upsert by key / remove |
 | `set_status(StatusTone::Ok, "8/8 exchanges")` | short status line in the pane |
 | `alert(AlertLevel::Warn, title, body)` / `alert_row(…, key)` | toast + sound + notification (≤ 6/min) |
-| `open_market(&MarketRef)` / `open_spread(&a, &b, None)` | only inside `on_click` |
+| `open_market(&MarketRef)` / `open_spread(&a, &b, None)` | only inside `on_click` (needs `export_screener!(T, on_click)`) |
 | `kv_get::<T>(key)` / `kv_set(key, &v)` / `kv_delete(key)` | state that survives restarts, ≤ 1 MiB total |
 | `history_cluster(&req)` / `history_replay(&req)` | cloud history; needs `history: [cluster]` / `[replay]` in the manifest |
 | `now_ms()` | current time (there is no `std::time` in wasm) |
@@ -94,15 +104,24 @@ Row::new(format!("{exchange}:{symbol}"))                    // stable unique key
 
 Every `cells` key must be a column `key` in the manifest. At most 5000 rows.
 
+Symbols: put the canonical `BASEQUOTE` in upper case into rows and `MarketRef` (`BTCUSDT`, Hyperliquid
+`BTCUSDC`); the exchange's native symbol (`BTC-USDT-SWAP`, `BTC_USDT`) also works — the terminal
+resolves both. `tickers()`/`symbols()` return the terminal's symbol with `base` and `quote`.
+
 Helpers:
 - `Series::new(mins(16))` — per-key history: `push(ts, v)`, `value_at(ts)`, `change_pct(now, mins(5))`
   (`None` until enough history). Keep one per key in a `HashMap<String, Series>`; drop stale keys.
 - `secs(n)`, `mins(n)`, `hours(n)` → milliseconds.
 - `space_screener::oi` — open interest (one side, USD) for 8 exchanges: `Collector::new()` then
-  `collector.collect(now_ms)?` → one `Snapshot { exchange, result }` per exchange. Items have
-  `exchange`, native `symbol` (use for clicks), normalized `base`, `quote`, `oi_usd`, `price`,
-  `market_ref()`, `pair()`. Add `space_screener::oi::HOSTS` to manifest `http`. Parsers per exchange
-  (`oi::bybit::parse(body)` …) are public if you need only part of it.
+  `collector.collect(now_ms)?` → one `Snapshot` per exchange: `result` (items that arrived),
+  `is_complete()`, `summary()` (`"binance 180/200"`, `"mexc: no data"`), `first_error`. Items have
+  `exchange`, canonical `symbol` (`BTCUSDT`, use for rows and clicks), `native_symbol`, `base`, `quote`,
+  `oi_usd`, `price`, `market_ref()`. Add `space_screener::oi::HOSTS` to manifest `http`. Parsers per
+  exchange (`oi::bybit::parse(body)` …) are public if you need only part of it.
+- Binance has no bulk open interest: one request per symbol, and the terminal allows 5 requests/s to
+  `fapi.binance.com`, so a round of N symbols takes about N/5 s (200 → 40 s). The collector polls the
+  top `BINANCE_TOP_N` = 200 USDT perpetuals by 24h volume; change it with
+  `collector.set_binance_top_n(n)` (`0` = all ≈ 530 symbols ≈ 2 min). Keep `timer_ms` ≥ 60000.
 
 ## Manifest essentials
 
@@ -114,7 +133,7 @@ name: {ru: "Открытый интерес", en: "Open interest"}
 lang: rust
 min_terminal: 0.104.70
 http: [fapi.binance.com, api.bybit.com]   # every host you call, bare names, no https://
-timer_ms: 60000                  # >= 250
+timer_ms: 60000                  # 250..=3600000
 columns:
   - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
   - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
@@ -151,8 +170,10 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | `println!` prints nothing | use `info!` and `st logs` |
 | `host_not_allowed` | add the exact host to manifest `http` |
 | `limit` status / cpu overrun | parse only the fields you need (`#[derive(Deserialize)]` structs, not `serde_json::Value`), raise `limits.cpu_ms_per_call`, cache slow-changing metadata |
-| slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints (exchange rate limits are shared with the user's trading IP) |
-| `not_in_click` | `open_market` only from `on_click` |
+| slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints (exchange rate limits are shared with the user's trading IP; `fapi.binance.com` is capped at 5 requests/s) |
+| clicks feel slow | do not export `on_click` unless needed — without it the terminal opens the row's market at once |
+| `not_in_click` | `open_market` only from `on_click` exported with `export_screener!(T, on_click)` |
+| plugin restarts, `st logs` shows `panic: …` | fix the panic at the logged location (index out of bounds, `unwrap` on `None`, …) |
 | numbers as strings in exchange JSON | parse strings (`"83890.5".parse::<f64>()`) or deserialize with a string-or-number helper |
 
 ## Example: open interest on 8 exchanges
@@ -175,9 +196,12 @@ impl Screener for OiScreener {
     fn on_timer(&mut self, now_ms: i64) -> ScreenerResult {
         let min_oi = params().f64_or("min_oi", 5_000_000.0);
         let mut rows = Vec::new();
+        let mut incomplete = Vec::new();
         for snapshot in self.collector.collect(now_ms)? {
+            if !snapshot.is_complete() {
+                incomplete.push(snapshot.summary());
+            }
             let Ok(items) = snapshot.result else {
-                warn!("{}: no data", snapshot.exchange);
                 continue;
             };
             for oi in items {
@@ -190,7 +214,7 @@ impl Screener for OiScreener {
                 rows.push(
                     Row::new(key)
                         .market_ref(&oi.market_ref())
-                        .cell("symbol", oi.pair())
+                        .cell("symbol", oi.symbol.as_str())
                         .cell("exchange", oi.exchange)
                         .cell("oi", oi.oi_usd)
                         .cell("chg5", series.change_pct(now_ms, mins(5)).map(Cell::signed))
@@ -199,6 +223,11 @@ impl Screener for OiScreener {
             }
         }
         self.history.retain(|_, s| s.last_ts().is_some_and(|t| now_ms - t < mins(30)));
+        if incomplete.is_empty() {
+            set_status(StatusTone::Ok, "8/8 exchanges")?;
+        } else {
+            set_status(StatusTone::Warn, incomplete.join(" · "))?;
+        }
         replace_rows(rows)?;
         Ok(())
     }
@@ -208,7 +237,8 @@ export_screener!(OiScreener);
 ```
 
 Manifest: the 8 hosts of `space_screener::oi::HOSTS` in `http`, `timer_ms: 60000`,
-`limits: {cpu_ms_per_call: 1000}`, columns `symbol, exchange, oi, chg5, chg15`.
+`limits: {cpu_ms_per_call: 1000}`, columns `symbol, exchange, oi, chg5, chg15`. The full example also has
+a `binance_top_n` param (`collector.set_binance_top_n(..)` in `on_timer`).
 Changes stay empty for the first 5/15 minutes — the screener builds history from its own snapshots.
 
 ## Done checklist
