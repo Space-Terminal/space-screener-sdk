@@ -29,7 +29,8 @@ and HTTP, and hands rows back. The full wire contract is `ABI.md` in the SDK rep
    in the background. Every reinstall restarts the plugin and wipes its in-memory state, so 5/15-minute
    windows start over after each save; keep small state that must survive in `kv_set`.
 6. **Check.** `st rows` (what the pane shows; `--json` prints the terminal's response as is:
-   `{ok, version, status, status_text?, rows}`), `st logs` (plugin log), `st list`
+   `{ok, version, status, status_text?, rows}`), `st logs` (plugin log; after every `on_timer` it has a
+   debug line `wasm cpu … ms (limit …), wall … ms` — the margin to the CPU limit), `st list`
    (status: running / stopped / error / limit). Iterate until rows look right, then tell the user to
    look at the pane and click a row.
 
@@ -104,8 +105,8 @@ Row::new(format!("{exchange}:{symbol}"))                    // stable unique key
     .rank(1)                                                 // pinned above rank 0
 ```
 
-Every `cells` key must be a column `key` in the manifest. Each row ≤ 16 KiB of JSON. The host keeps at
-most 10000 rows per plugin and drops the rest, so filter and truncate yourself (sort, then keep the top N).
+Every `cells` key must be a column `key` in the manifest. Each row ≤ 16 KiB of JSON. At most 10000 rows or 32 MiB per plugin: beyond either cap the host evicts the least recently updated rows, so `replace: true` with more rows keeps the last ones of the batch.
+So sort and truncate yourself (keep the top N) before `replace_rows`.
 
 Symbols: put the canonical `BASEQUOTE` in upper case into rows and `MarketRef` (`BTCUSDT`, Hyperliquid
 `BTCUSDC`); the exchange's native symbol (`BTC-USDT-SWAP`, `BTC_USDT`) also works — the terminal
@@ -281,7 +282,7 @@ params:
 ```
 
 `min_oi` is a filter, not a cap: at 5M$ it leaves about 1800 of ~2100 contracts, and a lower value can
-exceed the host's 10000-row cap, past which rows are dropped. Sort and truncate to a `limit` param, as
+exceed the host's 10000-row cap, past which the least recently updated rows are evicted. Sort and truncate to a `limit` param, as
 `examples/oi-8-exchanges` does. The full example also has a `binance_top_n` param
 (`collector.set_binance_top_n(..)` in `on_timer`). Changes stay empty for the first 5/15 minutes — the
 screener builds history from its own snapshots.

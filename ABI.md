@@ -192,9 +192,8 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 ```
 
 - `emit_rows` upserts by `key` (≤ 128 chars); `replace: true` replaces the whole table. `expire` removes
-  rows. `ttl_s` removes a row that was not re-emitted in time. At most 10000 rows per plugin (rows past
-  the cap are dropped by the host — filter and truncate in the plugin), each at most 16 KiB as serialized
-  JSON, 32 MiB of rows in total.
+  rows. `ttl_s` removes a row that was not re-emitted in time. Each row is at most 16 KiB as serialized
+  JSON. At most 10000 rows or 32 MiB per plugin: beyond either cap the host evicts the least recently updated rows, so `replace: true` with more rows keeps the last ones of the batch. Sort and truncate in the plugin so the rows you want are the ones kept.
 - `symbol`, `exchange`, `market` make the row clickable: the default click opens that market.
 - `rank` (default 0): higher ranks stay above lower ones whatever the sort (pins, favourites).
 - A cell is a JSON number, string, bool or `null`, or `{"v": value, "tone"?: "pos"|"neg"|"muted"|"warn"|"accent", "text"?: "shown instead of v"}`.
@@ -222,7 +221,7 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 | After a trap | the terminal recreates the plugin and calls `init` again; in-memory state is lost, `kv` survives |
 | `screener.wasm` | at most 10 MiB |
 | HTTP | `timeout_ms` 1000..=10000; body ≤ 8 MiB per response, ≤ 48 MiB per `http_batch` |
-| Rows | ≤ 10000 rows (the rest is dropped by the host), ≤ 16 KiB each (serialized), ≤ 32 MiB in total |
+| Rows | ≤ 16 KiB each (serialized); ≤ 10000 rows or 32 MiB per plugin, beyond either cap the least recently updated rows are evicted |
 
 ## Local API for tooling (`st`)
 
