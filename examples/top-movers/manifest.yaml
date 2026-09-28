@@ -1,0 +1,22 @@
+abi: 1
+id: space.top-movers
+version: 0.1.0
+name: {ru: "Топ движений за 5 минут", en: "Top 5 minute movers"}
+description:
+  ru: "Самые сильные изменения цены за 5 минут на подключённых биржах"
+  en: "Biggest 5 minute price moves on connected exchanges"
+lang: rust
+min_terminal: 0.104.70
+http: []
+timer_ms: 5000
+columns:
+  - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
+  - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
+  - {key: chg5, type: percent, title: {ru: "5м", en: "5m"}, sort: desc}
+  - {key: chg24, type: percent, title: {ru: "24ч", en: "24h"}}
+  - {key: volume, type: usd, title: {ru: "Объём 24ч", en: "24h volume"}}
+  - {key: last, type: price, title: {ru: "Цена", en: "Last"}}
+params:
+  - {key: market, type: select, title: {ru: "Рынок", en: "Market"}, default: futures, options: [futures, spot]}
+  - {key: min_volume, type: number, title: {ru: "Мин. объём, $", en: "Min volume, $"}, default: 5000000, min: 0}
+  - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 100, min: 1, max: 1000}

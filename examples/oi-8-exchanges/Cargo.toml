@@ -1,0 +1,21 @@
+[package]
+name = "oi_8_exchanges"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+space-screener = { path = "../../crates/space-screener" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Keeps this crate out of the SDK workspace.
+[workspace]
