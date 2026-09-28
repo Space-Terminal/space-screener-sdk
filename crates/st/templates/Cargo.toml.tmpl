@@ -1,0 +1,20 @@
+[package]
+name = "{{crate}}"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+{{sdk_dep}}
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Keeps this crate out of any parent workspace.
+[workspace]

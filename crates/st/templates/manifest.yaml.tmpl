@@ -1,0 +1,19 @@
+abi: 1
+id: {{id}}
+version: 0.1.0
+name: {ru: "{{name}}", en: "{{name}}"}
+description: {en: "Starter screener: biggest 24h movers on connected futures exchanges"}
+lang: rust
+min_terminal: {{min_terminal}}
+# Exact hosts this screener calls with http()/http_batch(), e.g. [fapi.binance.com, api.bybit.com].
+http: []
+timer_ms: 10000
+columns:
+  - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
+  - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
+  - {key: change, type: percent, title: {ru: "Изм. 24ч", en: "24h change"}, sort: desc}
+  - {key: volume, type: usd, title: {ru: "Объём 24ч", en: "24h volume"}}
+  - {key: last, type: price, title: {ru: "Цена", en: "Last"}}
+params:
+  - {key: min_volume, type: number, title: {ru: "Мин. объём, $", en: "Min volume, $"}, default: 1000000, min: 0}
+  - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 50, min: 1, max: 500}
