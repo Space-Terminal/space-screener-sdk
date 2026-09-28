@@ -50,9 +50,11 @@ const METADATA_TTL_MS: i64 = hours(1);
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenInterest {
     pub exchange: &'static str,
-    /// Native exchange symbol; pass it to `open_market` as is.
+    /// Canonical `BASEQUOTE` in upper case (`BTCUSDT`, Hyperliquid `BTCUSDC`, KuCoin `XBT` → `BTCUSDT`):
+    /// use it for rows and `open_market`.
     pub symbol: String,
-    /// Normalized base asset (`XBT` → `BTC`, Hyperliquid `kPEPE` → `1000PEPE`) for cross-exchange grouping.
+    /// The exchange's own symbol (`BTC-USDT-SWAP`, `BTC_USDT`, `XBTUSDTM`, `BTC`): use it in exchange requests.
+    pub native_symbol: String,
     pub base: String,
     pub quote: String,
     pub oi_usd: f64,
@@ -60,12 +62,29 @@ pub struct OpenInterest {
 }
 
 impl OpenInterest {
-    pub fn market_ref(&self) -> MarketRef {
-        MarketRef::new(self.exchange, Market::Futures, self.symbol.clone())
+    pub(crate) fn new(
+        exchange: &'static str,
+        native_symbol: String,
+        base: &str,
+        quote: &str,
+        oi_usd: f64,
+        price: f64,
+    ) -> Self {
+        let base = base.to_ascii_uppercase();
+        let quote = quote.to_ascii_uppercase();
+        Self {
+            exchange,
+            symbol: format!("{base}{quote}"),
+            native_symbol,
+            base,
+            quote,
+            oi_usd,
+            price,
+        }
     }
 
-    pub fn pair(&self) -> String {
-        format!("{}{}", self.base, self.quote)
+    pub fn market_ref(&self) -> MarketRef {
+        MarketRef::new(self.exchange, Market::Futures, self.symbol.clone())
     }
 }
 

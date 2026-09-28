@@ -43,14 +43,14 @@ pub fn parse(body: &str) -> Result<Vec<OpenInterest>> {
         .into_iter()
         .filter_map(|t| {
             let base = t.symbol.strip_suffix("USDT")?.to_string();
-            Some(OpenInterest {
-                exchange: SLUG,
-                base,
-                quote: "USDT".into(),
-                oi_usd: t.holding_amount * t.mark_price,
-                price: t.mark_price,
-                symbol: t.symbol,
-            })
+            Some(OpenInterest::new(
+                SLUG,
+                t.symbol,
+                &base,
+                "USDT",
+                t.holding_amount * t.mark_price,
+                t.mark_price,
+            ))
         })
         .collect())
 }

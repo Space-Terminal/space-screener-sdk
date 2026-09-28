@@ -40,6 +40,7 @@ struct AssetCtx {
 }
 
 /// Contexts are aligned with `universe` by index; open interest is in coins, margin is USDC.
+/// `kPEPE` stays `KPEPEUSDC` (1000 PEPE): that is how the terminal lists it.
 pub fn parse(body: &str) -> Result<Vec<OpenInterest>> {
     let Response(meta, ctxs) = from_json(body)?;
     if meta.universe.len() != ctxs.len() {
@@ -52,21 +53,15 @@ pub fn parse(body: &str) -> Result<Vec<OpenInterest>> {
         .into_iter()
         .zip(ctxs)
         .filter(|(asset, _)| !asset.is_delisted)
-        .map(|(asset, ctx)| OpenInterest {
-            exchange: SLUG,
-            base: normalize_base(&asset.name),
-            quote: "USDC".into(),
-            oi_usd: ctx.open_interest * ctx.mark_px,
-            price: ctx.mark_px,
-            symbol: asset.name,
+        .map(|(asset, ctx)| {
+            OpenInterest::new(
+                SLUG,
+                asset.name.clone(),
+                &asset.name,
+                "USDC",
+                ctx.open_interest * ctx.mark_px,
+                ctx.mark_px,
+            )
         })
         .collect())
-}
-
-/// `kPEPE` is 1000 PEPE, as `1000PEPE` elsewhere.
-fn normalize_base(name: &str) -> String {
-    match name.strip_prefix('k') {
-        Some(rest) if rest.starts_with(|c: char| c.is_ascii_uppercase()) => format!("1000{rest}"),
-        _ => name.to_string(),
-    }
 }

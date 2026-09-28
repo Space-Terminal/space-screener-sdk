@@ -26,7 +26,7 @@ impl OiScreener {
             return;
         }
         self.alerted_at.insert(key.to_string(), now_ms);
-        let title = format!("OI {chg5:+.1}% · {} {}", oi.pair(), oi.exchange);
+        let title = format!("OI {chg5:+.1}% · {} {}", oi.symbol, oi.exchange);
         let body = format!("Open interest {:.1}M$ after 5 minutes", oi.oi_usd / 1e6);
         if let Err(e) = alert_row(AlertLevel::Warn, title, body, key) {
             warn!("alert failed: {e}");
@@ -72,7 +72,7 @@ impl Screener for OiScreener {
                 }
                 let row = Row::new(key)
                     .market_ref(&oi.market_ref())
-                    .cell("symbol", oi.pair())
+                    .cell("symbol", oi.symbol.as_str())
                     .cell("exchange", oi.exchange)
                     .cell("oi", oi.oi_usd)
                     .cell("chg5", chg5.map(Cell::signed))

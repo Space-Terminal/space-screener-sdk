@@ -34,14 +34,14 @@ pub fn parse(body: &str) -> Result<Vec<OpenInterest>> {
         .filter(|c| c.status == "trading" && !c.in_delisting)
         .filter_map(|c| {
             let base = c.name.strip_suffix("_USDT")?.to_string();
-            Some(OpenInterest {
-                exchange: SLUG,
-                base,
-                quote: "USDT".into(),
-                oi_usd: c.position_size * c.quanto_multiplier * c.mark_price,
-                price: c.mark_price,
-                symbol: c.name,
-            })
+            Some(OpenInterest::new(
+                SLUG,
+                c.name,
+                &base,
+                "USDT",
+                c.position_size * c.quanto_multiplier * c.mark_price,
+                c.mark_price,
+            ))
         })
         .collect())
 }

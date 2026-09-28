@@ -43,7 +43,7 @@ pub fn parse(body: &str) -> Result<Vec<OpenInterest>> {
         .into_iter()
         .filter_map(|item| {
             let mut parts = item.inst_id.split('-');
-            let base = parts.next()?.to_string();
+            let base = parts.next()?;
             let quote = parts.next()?;
             if quote != "USDT" {
                 return None;
@@ -53,14 +53,14 @@ pub fn parse(body: &str) -> Result<Vec<OpenInterest>> {
             } else {
                 0.0
             };
-            Some(OpenInterest {
-                exchange: SLUG,
+            Some(OpenInterest::new(
+                SLUG,
+                item.inst_id.clone(),
                 base,
-                quote: quote.to_string(),
-                oi_usd: item.oi_usd,
+                quote,
+                item.oi_usd,
                 price,
-                symbol: item.inst_id,
-            })
+            ))
         })
         .collect())
 }

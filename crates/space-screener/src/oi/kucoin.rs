@@ -58,20 +58,22 @@ pub fn parse(body: &str) -> Result<Vec<OpenInterest>> {
                 && c.status == "Open"
                 && !c.is_inverse
         })
-        .map(|c| OpenInterest {
-            exchange: SLUG,
-            base: normalize_base(&c.base_currency),
-            quote: c.quote_currency,
-            oi_usd: c.open_interest * c.multiplier * c.mark_price,
-            price: c.mark_price,
-            symbol: c.symbol,
+        .map(|c| {
+            OpenInterest::new(
+                SLUG,
+                c.symbol,
+                normalize_base(&c.base_currency),
+                &c.quote_currency,
+                c.open_interest * c.multiplier * c.mark_price,
+                c.mark_price,
+            )
         })
         .collect())
 }
 
-fn normalize_base(base: &str) -> String {
+fn normalize_base(base: &str) -> &str {
     match base {
-        "XBT" => "BTC".into(),
-        other => other.into(),
+        "XBT" => "BTC",
+        other => other,
     }
 }

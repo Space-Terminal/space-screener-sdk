@@ -108,14 +108,14 @@ pub fn assemble(
         .filter_map(|(symbol, oi)| {
             let info = by_symbol.get(symbol.as_str())?;
             let price = *marks.get(&symbol)?;
-            Some(OpenInterest {
-                exchange: SLUG,
-                base: info.base.clone(),
-                quote: info.quote.clone(),
-                oi_usd: oi * price,
+            Some(OpenInterest::new(
+                SLUG,
+                symbol.clone(),
+                &info.base,
+                &info.quote,
+                oi * price,
                 price,
-                symbol,
-            })
+            ))
         })
         .collect()
 }

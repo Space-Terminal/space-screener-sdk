@@ -79,14 +79,14 @@ pub fn parse(body: &str, contract_sizes: &HashMap<String, f64>) -> Result<Vec<Op
         .filter_map(|t| {
             let size = *contract_sizes.get(&t.symbol)?;
             let base = t.symbol.strip_suffix("_USDT")?.to_string();
-            Some(OpenInterest {
-                exchange: SLUG,
-                base,
-                quote: "USDT".into(),
-                oi_usd: t.hold_vol * size * t.fair_price / 2.0,
-                price: t.fair_price,
-                symbol: t.symbol,
-            })
+            Some(OpenInterest::new(
+                SLUG,
+                t.symbol,
+                &base,
+                "USDT",
+                t.hold_vol * size * t.fair_price / 2.0,
+                t.fair_price,
+            ))
         })
         .collect())
 }
