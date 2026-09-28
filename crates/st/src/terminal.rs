@@ -237,6 +237,11 @@ impl Terminal {
     pub fn rows(&self, id: &str) -> Result<Rows> {
         self.send(self.client.get(self.url(&format!("/{id}/rows"))))
     }
+
+    /// The rows response exactly as the terminal sent it.
+    pub fn rows_json(&self, id: &str) -> Result<Value> {
+        self.send(self.client.get(self.url(&format!("/{id}/rows"))))
+    }
 }
 
 pub fn format_time(ts_ms: i64) -> String {

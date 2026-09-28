@@ -78,7 +78,7 @@ enum Command {
         dir: PathBuf,
         #[arg(long)]
         id: Option<String>,
-        /// Raw JSON as the terminal returns it
+        /// The terminal's response as is: {ok, version, status, status_text?, rows}
         #[arg(long)]
         json: bool,
         /// Show at most this many rows
@@ -142,17 +142,13 @@ fn run(cli: Cli) -> Result<()> {
             limit,
         } => {
             let id = project::screener_id(&dir, id)?;
-            let rows = Terminal::connect(cli.port)?.rows(&id)?;
+            let terminal = Terminal::connect(cli.port)?;
             if json {
-                let out = serde_json::json!({
-                    "version": rows.version,
-                    "status": rows.status,
-                    "status_text": rows.status_text,
-                    "rows": rows.rows,
-                });
+                let out = terminal.rows_json(&id)?;
                 println!("{}", serde_json::to_string_pretty(&out)?);
                 return Ok(());
             }
+            let rows = terminal.rows(&id)?;
             println!(
                 "status: {}{} · version {} · {} rows",
                 rows.status,

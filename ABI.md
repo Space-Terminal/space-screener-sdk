@@ -56,7 +56,7 @@ limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional
 ```
 
 - `id` matches `^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$` (3..64 chars, starts and ends with a letter or digit),
-  and no segment between dots is a Windows device name: `con`, `prn`, `aux`, `nul`, `com1`..`com9`,
+  is not `install` (a local API route), and no segment between dots is a Windows device name: `con`, `prn`, `aux`, `nul`, `com1`..`com9`,
   `lpt1`..`lpt9` (`ivan.con` is refused, `ivan.console` is fine) — the id is a folder name on every OS.
 - `http` hosts are bare DNS names; IP literals and `localhost` are refused.
 - The first column with `sort` is the default sort of the pane.

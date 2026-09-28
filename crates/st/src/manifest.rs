@@ -151,8 +151,8 @@ pub fn parse(text: &str) -> Result<Manifest> {
     serde_yaml::from_str(text).context("invalid_manifest: manifest.yaml does not parse")
 }
 
-pub const ID_RULE: &str = "^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$, no segment between dots may be a \
-     Windows device name (con, prn, aux, nul, com1..com9, lpt1..lpt9)";
+pub const ID_RULE: &str = "^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$, not `install`, no segment between dots \
+     may be a Windows device name (con, prn, aux, nul, com1..com9, lpt1..lpt9)";
 
 // The id is a folder name on every OS, so Windows device names are refused in any dot segment.
 fn is_windows_device(segment: &str) -> bool {
@@ -174,6 +174,8 @@ pub fn is_valid_id(id: &str) -> bool {
             .iter()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(b))
         && !id.split('.').any(is_windows_device)
+        // `/api/v1/screeners/install` is the install route, not a screener.
+        && id != "install"
 }
 
 /// Mirrors the terminal: the host is trimmed and lower-cased before the check; a numeric TLD,
@@ -531,6 +533,8 @@ limits: {memory_mb: 128}
         assert!(!is_valid_id("Ab.c"));
         assert!(!is_valid_id(&"a".repeat(65)));
         assert!(is_valid_id(&"a".repeat(64)));
+        assert!(!is_valid_id("install"));
+        assert!(is_valid_id("ivan.install"));
         for reserved in [
             "con.oi",
             "ivan.nul",

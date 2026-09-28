@@ -27,7 +27,8 @@ and HTTP, and hands rows back. The full wire contract is `ABI.md` in the SDK rep
 5. **Run.** With Space Terminal running: `st dev` — installs the plugin, asks the terminal to open a
    pane for it, then rebuilds and reinstalls on every save and prints the plugin log. Leave it running
    in the background.
-6. **Check.** `st rows` (what the pane shows, `--json` for raw), `st logs` (plugin log), `st list`
+6. **Check.** `st rows` (what the pane shows; `--json` prints the terminal's response as is:
+   `{ok, version, status, status_text?, rows}`), `st logs` (plugin log), `st list`
    (status: running / stopped / error / limit). Iterate until rows look right, then tell the user to
    look at the pane and click a row.
 
@@ -128,7 +129,7 @@ Helpers:
 
 ```yaml
 abi: 1
-id: author.oi-8-exchanges        # [a-z0-9._-], 3..64, starts/ends with a letter or digit; no con/prn/aux/nul/com1-9/lpt1-9 segment
+id: author.oi-8-exchanges        # [a-z0-9._-], 3..64, starts/ends with a letter or digit; not `install`; no con/prn/aux/nul/com1-9/lpt1-9 segment
 version: 0.1.0
 name: {ru: "Открытый интерес", en: "Open interest"}
 lang: rust
