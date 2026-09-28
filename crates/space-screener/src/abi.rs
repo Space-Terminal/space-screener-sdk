@@ -9,8 +9,6 @@ use serde_json::{Map, Value};
 pub enum Market {
     Spot,
     Futures,
-    Forex,
-    Moex,
 }
 
 impl fmt::Display for Market {
@@ -18,8 +16,6 @@ impl fmt::Display for Market {
         f.write_str(match self {
             Self::Spot => "spot",
             Self::Futures => "futures",
-            Self::Forex => "forex",
-            Self::Moex => "moex",
         })
     }
 }

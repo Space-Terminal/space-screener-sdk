@@ -127,6 +127,14 @@ impl<T: DeserializeOwned> Envelope<T> {
 }
 
 #[derive(Serialize)]
+struct OpenSpread<'a> {
+    a: &'a MarketRef,
+    b: &'a MarketRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    layout: Option<SpreadLayout>,
+}
+
+#[derive(Serialize)]
 struct HttpBatch<'a> {
     requests: &'a [HttpRequest],
 }
@@ -268,10 +276,7 @@ pub fn open_market(market: &MarketRef) -> Result<()> {
 
 /// Only valid inside `on_click`; at most one open per click.
 pub fn open_spread(a: &MarketRef, b: &MarketRef, layout: Option<SpreadLayout>) -> Result<()> {
-    call(
-        HostFn::OpenSpread,
-        &json!({ "a": a, "b": b, "layout": layout }),
-    )
+    call(HostFn::OpenSpread, &OpenSpread { a, b, layout })
 }
 
 /// Best effort: a failed log call is dropped.
@@ -316,6 +321,19 @@ mod tests {
             .collect();
         assert_eq!(items[0].as_ref().unwrap().status, 200);
         assert_eq!(items[1].as_ref().unwrap_err().code(), Some("timeout"));
+    }
+
+    #[test]
+    fn open_spread_omits_missing_layout() {
+        let a = MarketRef::new("binance", Market::Futures, "BTCUSDT");
+        let b = MarketRef::new("bybit", Market::Spot, "BTCUSDT");
+        let json = serde_json::to_value(OpenSpread {
+            a: &a,
+            b: &b,
+            layout: None,
+        })
+        .unwrap();
+        assert!(json.get("layout").is_none());
     }
 
     #[test]
