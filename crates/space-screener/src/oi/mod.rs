@@ -47,6 +47,9 @@ pub const HOSTS: [&str; 8] = [
 
 const METADATA_TTL_MS: i64 = hours(1);
 
+/// Binance symbols polled per round by default: top by 24h quote volume.
+pub const BINANCE_TOP_N: usize = 200;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenInterest {
     pub exchange: &'static str,
@@ -91,7 +94,44 @@ impl OpenInterest {
 #[derive(Debug)]
 pub struct Snapshot {
     pub exchange: &'static str,
+    /// Items that arrived; for per-symbol exchanges (Binance) it holds the successful part.
     pub result: Result<Vec<OpenInterest>>,
+    /// Per-symbol requests of this round; 0 for exchanges with a bulk endpoint.
+    pub requested: usize,
+    /// How many of `requested` failed.
+    pub failed: usize,
+    /// The first per-symbol failure, to log the reason.
+    pub first_error: Option<Error>,
+}
+
+impl Snapshot {
+    fn bulk(exchange: &'static str, result: Result<Vec<OpenInterest>>) -> Self {
+        Self {
+            exchange,
+            result,
+            requested: 0,
+            failed: 0,
+            first_error: None,
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.result.is_ok() && self.failed == 0
+    }
+
+    /// Short status: `okx`, `binance 180/200`, `mexc: no data`.
+    pub fn summary(&self) -> String {
+        match (&self.result, self.requested) {
+            (Err(_), 0) => format!("{}: no data", self.exchange),
+            (_, 0) => self.exchange.to_string(),
+            _ => format!(
+                "{} {}/{}",
+                self.exchange,
+                self.requested - self.failed,
+                self.requested
+            ),
+        }
+    }
 }
 
 struct Cached<T> {
@@ -109,7 +149,7 @@ impl<T> Cached<T> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Slot {
     BinanceInfo,
-    BinancePremium,
+    BinanceTicker,
     Bybit,
     Okx,
     Bitget,
@@ -121,8 +161,13 @@ enum Slot {
 }
 
 /// Polls open interest; keeps slow-changing metadata (Binance symbols, MEXC contract sizes) for an hour.
+///
+/// Binance needs one request per symbol, and the terminal allows 5 requests/s to
+/// `fapi.binance.com`, so a round of N Binance symbols takes about N/5 s. Only the top
+/// [`BINANCE_TOP_N`] by 24h volume are polled unless [`Collector::set_binance_top_n`] says otherwise.
 pub struct Collector {
     exchanges: Vec<&'static str>,
+    binance_top_n: usize,
     binance_symbols: Option<Cached<Vec<binance::PerpSymbol>>>,
     mexc_sizes: Option<Cached<HashMap<String, f64>>>,
 }
@@ -145,9 +190,20 @@ impl Collector {
                 .into_iter()
                 .filter(|e| exchanges.contains(e))
                 .collect(),
+            binance_top_n: BINANCE_TOP_N,
             binance_symbols: None,
             mexc_sizes: None,
         }
+    }
+
+    /// `0` polls every Binance USDT perpetual.
+    pub fn with_binance_top_n(mut self, top_n: usize) -> Self {
+        self.binance_top_n = top_n;
+        self
+    }
+
+    pub fn set_binance_top_n(&mut self, top_n: usize) {
+        self.binance_top_n = top_n;
     }
 
     fn wants(&self, slug: &str) -> bool {
@@ -160,7 +216,7 @@ impl Collector {
             if !Cached::fresh(&self.binance_symbols, now_ms) {
                 reqs.push((Slot::BinanceInfo, binance::exchange_info_request()));
             }
-            reqs.push((Slot::BinancePremium, binance::premium_index_request()));
+            reqs.push((Slot::BinanceTicker, binance::ticker_24h_request()));
         }
         if self.wants(bybit::SLUG) {
             reqs.push((Slot::Bybit, bybit::request()));
@@ -225,7 +281,10 @@ impl Collector {
         let mut out = Vec::with_capacity(self.exchanges.len());
         for &exchange in &self.exchanges {
             let result = match exchange {
-                binance::SLUG => self.collect_binance(take(Slot::BinancePremium)),
+                binance::SLUG => {
+                    out.push(self.collect_binance(take(Slot::BinanceTicker))?);
+                    continue;
+                }
                 bybit::SLUG => take(Slot::Bybit).and_then(|b| bybit::parse(&b)),
                 okx::SLUG => take(Slot::Okx).and_then(|b| okx::parse(&b)),
                 bitget::SLUG => take(Slot::Bitget).and_then(|b| bitget::parse(&b)),
@@ -240,32 +299,56 @@ impl Collector {
                 hyperliquid::SLUG => take(Slot::Hyperliquid).and_then(|b| hyperliquid::parse(&b)),
                 _ => continue,
             };
-            out.push(Snapshot { exchange, result });
+            out.push(Snapshot::bulk(exchange, result));
         }
         Ok(out)
     }
 
-    fn collect_binance(&self, premium: Result<String>) -> Result<Vec<OpenInterest>> {
-        let symbols = &self
+    /// `Err` only when the host refused the per-symbol batch itself.
+    fn collect_binance(&self, ticker: Result<String>) -> Result<Snapshot> {
+        let prepared = self
             .binance_symbols
             .as_ref()
-            .ok_or_else(|| Error::parse("Binance symbols are unavailable"))?
-            .value;
-        let marks = binance::parse_premium_index(&premium?)?;
-        let wanted: Vec<&binance::PerpSymbol> = symbols
-            .iter()
-            .filter(|s| marks.contains_key(&s.symbol))
-            .collect();
+            .ok_or_else(|| Error::parse("Binance symbols are unavailable"))
+            .and_then(|symbols| {
+                let days = binance::parse_ticker_24h(&ticker?)?;
+                Ok((&symbols.value, days))
+            });
+        let (symbols, days) = match prepared {
+            Ok(prepared) => prepared,
+            Err(e) => return Ok(Snapshot::bulk(binance::SLUG, Err(e))),
+        };
+        let wanted = binance::select_top(symbols, &days, self.binance_top_n);
         let reqs: Vec<HttpRequest> = wanted
             .iter()
             .map(|s| binance::open_interest_request(&s.symbol))
             .collect();
-        let ois = host::http_batch(&reqs)?.into_iter().filter_map(|resp| {
-            body(resp)
-                .and_then(|b| binance::parse_open_interest(&b))
-                .ok()
-        });
-        Ok(binance::assemble(symbols, &marks, ois))
+        let mut failed = 0;
+        let mut first_error = None;
+        let mut ois = Vec::with_capacity(reqs.len());
+        for resp in host::http_batch(&reqs)? {
+            match body(resp).and_then(|b| binance::parse_open_interest(&b)) {
+                Ok(oi) => ois.push(oi),
+                Err(e) => {
+                    failed += 1;
+                    first_error.get_or_insert(e);
+                }
+            }
+        }
+        let result = match (ois.is_empty(), first_error.take()) {
+            (true, Some(e)) => Err(e),
+            (_, e) => {
+                first_error = e;
+                Ok(binance::assemble(symbols, &days, ois))
+            }
+        };
+        Ok(Snapshot {
+            exchange: binance::SLUG,
+            result,
+            requested: reqs.len(),
+            failed,
+            first_error,
+        })
     }
 }
 
@@ -275,4 +358,29 @@ fn body(resp: Result<HttpResponse>) -> Result<String> {
 
 pub(crate) fn from_json<T: DeserializeOwned>(body: &str) -> Result<T> {
     serde_json::from_str(body).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_summary_shows_partial_success() {
+        let partial = Snapshot {
+            exchange: binance::SLUG,
+            result: Ok(Vec::new()),
+            requested: 200,
+            failed: 20,
+            first_error: Some(Error::parse("timeout")),
+        };
+        assert_eq!(partial.summary(), "binance 180/200");
+        assert!(!partial.is_complete());
+
+        let bulk = Snapshot::bulk(okx::SLUG, Ok(Vec::new()));
+        assert_eq!(bulk.summary(), "okx");
+        assert!(bulk.is_complete());
+
+        let failed = Snapshot::bulk(mexc::SLUG, Err(Error::parse("x")));
+        assert_eq!(failed.summary(), "mexc: no data");
+    }
 }

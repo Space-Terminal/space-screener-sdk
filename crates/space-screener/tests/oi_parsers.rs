@@ -24,15 +24,22 @@ fn binance_keeps_trading_usdt_perpetuals_and_prices_them() {
     let names: Vec<&str> = symbols.iter().map(|s| s.symbol.as_str()).collect();
     assert_eq!(names, ["BTCUSDT", "ETHUSDT"]);
 
-    let marks = binance::parse_premium_index(&fixture("binance_premium_index.json")).unwrap();
+    let days = binance::parse_ticker_24h(&fixture("binance_ticker_24hr.json")).unwrap();
+    let top: Vec<&str> = binance::select_top(&symbols, &days, 1)
+        .iter()
+        .map(|s| s.symbol.as_str())
+        .collect();
+    assert_eq!(top, ["BTCUSDT"]);
+    assert_eq!(binance::select_top(&symbols, &days, 0).len(), 2);
+
     let oi = binance::parse_open_interest(&fixture("binance_open_interest.json")).unwrap();
     assert_eq!(oi, ("BTCUSDT".to_string(), 93294.408));
 
-    let rows = by_symbol(binance::assemble(&symbols, &marks, [oi]));
+    let rows = by_symbol(binance::assemble(&symbols, &days, [oi]));
     let btc = &rows["BTCUSDT"];
     assert_eq!((btc.base.as_str(), btc.quote.as_str()), ("BTC", "USDT"));
     assert_eq!(btc.native_symbol, "BTCUSDT");
-    assert!(close(btc.oi_usd, 93294.408 * 83892.7));
+    assert!(close(btc.oi_usd, 93294.408 * 83980.40));
     assert_eq!(btc.market_ref().market, Market::Futures);
 }
 

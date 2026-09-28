@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use space_screener::oi::{Collector, EXCHANGES, OpenInterest};
+use space_screener::oi::{BINANCE_TOP_N, Collector, EXCHANGES, OpenInterest};
 use space_screener::prelude::*;
 
 const HORIZON_MS: i64 = mins(16);
@@ -40,15 +40,25 @@ impl Screener for OiScreener {
         let min_oi = params.f64_or("min_oi", 5_000_000.0);
         let limit = params.i64_or("limit", 500).max(1) as usize;
         let alert_pct = params.f64_or("alert_pct", 0.0);
+        let binance_top_n = params.i64_or("binance_top_n", BINANCE_TOP_N as i64).max(0) as usize;
+        self.collector.set_binance_top_n(binance_top_n);
 
-        let mut failed = Vec::new();
+        let mut incomplete = Vec::new();
         let mut rows = Vec::new();
         for snapshot in self.collector.collect(now_ms)? {
+            if !snapshot.is_complete() {
+                incomplete.push(snapshot.summary());
+            }
+            if let Some(e) = &snapshot.first_error {
+                warn!(
+                    "{}: {} of {} requests failed, first: {e}",
+                    snapshot.exchange, snapshot.failed, snapshot.requested
+                );
+            }
             let items = match snapshot.result {
                 Ok(items) => items,
                 Err(e) => {
                     warn!("{}: {e}", snapshot.exchange);
-                    failed.push(snapshot.exchange);
                     continue;
                 }
             };
@@ -88,16 +98,16 @@ impl Screener for OiScreener {
 
         rows.sort_by(|a, b| b.0.total_cmp(&a.0));
         rows.truncate(limit);
-        let ok = EXCHANGES.len() - failed.len();
-        if failed.is_empty() {
+        let complete = EXCHANGES.len() - incomplete.len();
+        if incomplete.is_empty() {
             set_status(
                 StatusTone::Ok,
-                format!("{ok}/8 exchanges · {} rows", rows.len()),
+                format!("{complete}/8 exchanges · {} rows", rows.len()),
             )?;
         } else {
             set_status(
                 StatusTone::Warn,
-                format!("{ok}/8 exchanges · no data: {}", failed.join(", ")),
+                format!("{complete}/8 complete · {}", incomplete.join(" · ")),
             )?;
         }
         replace_rows(rows.into_iter().map(|(_, row)| row))?;

@@ -20,8 +20,9 @@ pub fn exchange_info_request() -> HttpRequest {
     HttpRequest::get(format!("https://{HOST}/fapi/v1/exchangeInfo"))
 }
 
-pub fn premium_index_request() -> HttpRequest {
-    HttpRequest::get(format!("https://{HOST}/fapi/v1/premiumIndex"))
+/// 24h statistics of every symbol in one request (weight 40): volume ranking and last price.
+pub fn ticker_24h_request() -> HttpRequest {
+    HttpRequest::get(format!("https://{HOST}/fapi/v1/ticker/24hr"))
 }
 
 /// Binance has no bulk open interest endpoint: one request per symbol (weight 1).
@@ -66,20 +67,42 @@ pub fn parse_exchange_info(body: &str) -> Result<Vec<PerpSymbol>> {
         .collect())
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Premium {
-    symbol: String,
+pub struct Day {
     #[serde(default, deserialize_with = "de::f64_flex")]
-    mark_price: f64,
+    pub last_price: f64,
+    #[serde(default, deserialize_with = "de::f64_flex")]
+    pub quote_volume: f64,
 }
 
-pub fn parse_premium_index(body: &str) -> Result<HashMap<String, f64>> {
-    let items: Vec<Premium> = from_json(body)?;
-    Ok(items
-        .into_iter()
-        .map(|p| (p.symbol, p.mark_price))
-        .collect())
+#[derive(Deserialize)]
+struct DayItem {
+    symbol: String,
+    #[serde(flatten)]
+    day: Day,
+}
+
+pub fn parse_ticker_24h(body: &str) -> Result<HashMap<String, Day>> {
+    let items: Vec<DayItem> = from_json(body)?;
+    Ok(items.into_iter().map(|i| (i.symbol, i.day)).collect())
+}
+
+/// The `top_n` perpetuals by 24h quote volume (`0` = all) that have 24h statistics.
+pub fn select_top<'a>(
+    symbols: &'a [PerpSymbol],
+    days: &HashMap<String, Day>,
+    top_n: usize,
+) -> Vec<&'a PerpSymbol> {
+    let mut ranked: Vec<(&PerpSymbol, f64)> = symbols
+        .iter()
+        .filter_map(|s| Some((s, days.get(&s.symbol)?.quote_volume)))
+        .collect();
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+    if top_n > 0 {
+        ranked.truncate(top_n);
+    }
+    ranked.into_iter().map(|(s, _)| s).collect()
 }
 
 #[derive(Deserialize)]
@@ -98,7 +121,7 @@ pub fn parse_open_interest(body: &str) -> Result<(String, f64)> {
 
 pub fn assemble(
     symbols: &[PerpSymbol],
-    marks: &HashMap<String, f64>,
+    days: &HashMap<String, Day>,
     open_interest: impl IntoIterator<Item = (String, f64)>,
 ) -> Vec<OpenInterest> {
     let by_symbol: HashMap<&str, &PerpSymbol> =
@@ -107,7 +130,7 @@ pub fn assemble(
         .into_iter()
         .filter_map(|(symbol, oi)| {
             let info = by_symbol.get(symbol.as_str())?;
-            let price = *marks.get(&symbol)?;
+            let price = days.get(&symbol)?.last_price;
             Some(OpenInterest::new(
                 SLUG,
                 symbol.clone(),
