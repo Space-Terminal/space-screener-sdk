@@ -4,6 +4,7 @@ description = "Rust PDK for Space Terminal screener plugins (wasm, Extism)"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
