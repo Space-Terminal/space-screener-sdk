@@ -4,9 +4,9 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use space_screener_check::wasm::ENTRY_POINTS;
-use space_screener_check::{Lang, Manifest, Report, WasmInfo};
+use space_screener_check::{Lang, Manifest, PluginLang, Report, WasmInfo};
 
-use crate::manifest;
+use crate::{manifest, ts};
 
 pub const WASM_TARGET: &str = "wasm32-unknown-unknown";
 pub const WASM_FILE: &str = space_screener_check::wasm::FILE;
@@ -18,7 +18,7 @@ pub struct Built {
     pub module: WasmInfo,
 }
 
-fn problems(report: &Report) -> String {
+pub fn problems(report: &Report) -> String {
     report
         .errors
         .iter()
@@ -39,9 +39,29 @@ pub fn check_manifest(dir: &Path) -> Result<(String, Manifest)> {
     }
 }
 
+/// Shape limits of `inspect` (functions, body size, nesting, br_table) name the function.
+fn shape_hint(report: &Report) -> &'static str {
+    if report
+        .errors
+        .iter()
+        .any(|issue| issue.path == "functions" || issue.path.starts_with("function "))
+    {
+        "\nhint: the terminal caps functions at 256 KiB of code each (10 000 functions, nesting 2 000, \
+         br_table 10 000 targets); an oversized one is usually a giant match or a table built inline — \
+         move the data into a static or split the function"
+    } else {
+        ""
+    }
+}
+
 fn check_module(wasm: &[u8]) -> Result<WasmInfo> {
-    space_screener_check::inspect(wasm)
-        .map_err(|report| anyhow!("{WASM_FILE}:\n  {}", problems(&report)))
+    space_screener_check::inspect(wasm).map_err(|report| {
+        anyhow!(
+            "{WASM_FILE}:\n  {}{}",
+            problems(&report),
+            shape_hint(&report)
+        )
+    })
 }
 
 fn ensure_target(dir: &Path) -> Result<()> {
@@ -127,8 +147,7 @@ fn artifact_path(dir: &Path) -> Result<PathBuf> {
         .join(format!("{}.wasm", lib.name.replace('-', "_"))))
 }
 
-pub fn build(dir: &Path) -> Result<Built> {
-    let (manifest_text, manifest) = check_manifest(dir)?;
+fn build_rust(dir: &Path) -> Result<Vec<u8>> {
     ensure_target(dir)?;
     let status = Command::new("cargo")
         .args(["build", "--release", "--target", WASM_TARGET])
@@ -139,8 +158,15 @@ pub fn build(dir: &Path) -> Result<Built> {
         bail!("cargo build failed");
     }
     let artifact = artifact_path(dir)?;
-    let wasm =
-        std::fs::read(&artifact).with_context(|| format!("cannot read {}", artifact.display()))?;
+    std::fs::read(&artifact).with_context(|| format!("cannot read {}", artifact.display()))
+}
+
+pub fn build(dir: &Path) -> Result<Built> {
+    let (manifest_text, manifest) = check_manifest(dir)?;
+    let wasm = match manifest.lang {
+        PluginLang::Rust => build_rust(dir)?,
+        PluginLang::Ts => ts::build(dir)?,
+    };
     std::fs::write(dir.join(WASM_FILE), &wasm).context("cannot write screener.wasm")?;
     let module = check_module(&wasm)?;
     Ok(Built {
@@ -187,9 +213,48 @@ pub fn print_summary(built: &Built) {
     println!("entry points: {}", exports.join(", "));
 }
 
+/// The catalog's extra rules (categories, description, source): a warning here, an error on
+/// `st publish`.
+pub fn print_catalog_readiness(built: &Built) {
+    let checked = space_screener_check::registry::check_wasm(&built.module).and_then(|()| {
+        space_screener_check::registry::check(&built.manifest_text, &built.manifest)
+    });
+    match checked {
+        Ok(info) => println!("catalog: ready ({})", info.categories.join(", ")),
+        Err(report) => eprintln!(
+            "warning: not ready for the catalog (`st publish` refuses it):\n  {}",
+            problems(&report)
+        ),
+    }
+}
+
 pub fn screener_id(dir: &Path, explicit: Option<String>) -> Result<String> {
     if let Some(id) = explicit {
         return Ok(id);
     }
     manifest::read_id(dir).context("pass --id or run inside a screener project")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use space_screener_check::{Code, Issue};
+
+    fn report(path: &str) -> Report {
+        Report {
+            errors: vec![Issue {
+                code: Code::InvalidWasm,
+                path: path.to_string(),
+                message: "x".to_string(),
+            }],
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn shape_errors_get_a_hint() {
+        assert!(shape_hint(&report("function 12")).contains("256 KiB"));
+        assert!(shape_hint(&report("functions")).contains("split the function"));
+        assert_eq!(shape_hint(&report("import wasi::fd_write")), "");
+    }
 }

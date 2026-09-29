@@ -1,0 +1,47 @@
+import { exchanges, num, replaceRows, setStatus, signed, tickers, warn } from "@space-terminal/screener";
+import type { InitInput, Row, TimerInput } from "@space-terminal/screener";
+
+// Top-level code runs once at build time: keep host calls inside the exports below.
+
+export function init(_input: InitInput) {}
+
+/** Starter screener: biggest 24h movers on every connected futures exchange. */
+export function on_timer(_input: TimerInput) {
+  const minVolume = num("min_volume", 1_000_000);
+  const limit = Math.max(1, num("limit", 50));
+
+  const movers: [number, Row][] = [];
+  for (const ex of exchanges()) {
+    if (!ex.connected || ex.market !== "futures") continue;
+    let snapshot;
+    try {
+      snapshot = tickers(ex.exchange, ex.market);
+    } catch (e) {
+      warn(`${ex.exchange}: ${e}`);
+      continue;
+    }
+    for (const t of snapshot.tickers) {
+      if (t.volume_quote < minVolume) continue;
+      movers.push([
+        Math.abs(t.change_pct),
+        {
+          key: `${ex.exchange}:${t.symbol}`,
+          exchange: ex.exchange,
+          market: ex.market,
+          symbol: t.symbol,
+          cells: {
+            symbol: t.symbol,
+            exchange: ex.exchange,
+            change: signed(t.change_pct),
+            volume: t.volume_quote,
+            last: t.last,
+          },
+        },
+      ]);
+    }
+  }
+  movers.sort((a, b) => b[0] - a[0]);
+  const rows = movers.slice(0, limit).map(([, row]) => row);
+  setStatus("ok", `${rows.length} rows`);
+  replaceRows(rows);
+}

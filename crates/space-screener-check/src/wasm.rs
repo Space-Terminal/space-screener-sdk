@@ -574,7 +574,7 @@ fn hint(module: &str, name: &str) -> &'static str {
             " (use space_screener::host::http; enable extism-pdk with default-features = false)"
         }
         (m, _) if m.starts_with("wasi") => {
-            " (build for wasm32-unknown-unknown, not wasip1; std::time, std::fs and threads are unavailable)"
+            " (Rust: build for wasm32-unknown-unknown, not wasip1 — std::time, std::fs and threads are unavailable; TypeScript: build with `st build`, which links stubs for js-pdk's WASI imports)"
         }
         ("__wbindgen_placeholder__", _) | ("wbg", _) => {
             " (wasm-bindgen crates such as getrandom/js or chrono/wasmbind do not run in the terminal)"

@@ -6,6 +6,8 @@ description:
   ru: "Самые сильные изменения цены за 5 минут на подключённых биржах"
   en: "Biggest 5 minute price moves on connected exchanges"
 lang: rust
+categories: [movers]
+source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/top-movers
 min_terminal: 0.104.70
 http: []
 timer_ms: 5000

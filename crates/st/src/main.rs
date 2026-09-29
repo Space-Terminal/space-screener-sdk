@@ -2,7 +2,12 @@ mod dev;
 mod init;
 mod manifest;
 mod project;
+mod record;
+mod registry;
 mod terminal;
+mod test;
+mod toolchain;
+mod ts;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -27,7 +32,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a screener project (Cargo.toml, manifest.yaml, src/lib.rs)
+    /// Create a screener project (Rust: Cargo.toml + src/lib.rs; TypeScript: package.json + src/index.ts)
     Init {
         /// Project folder; created if missing
         #[arg(default_value = ".")]
@@ -38,16 +43,46 @@ enum Command {
         /// Path to the space-screener crate (default: the local SDK checkout st was built from, else git)
         #[arg(long)]
         sdk_path: Option<PathBuf>,
+        /// Language of the screener: rust or ts (TypeScript, built with extism-js)
+        #[arg(long, default_value = "rust")]
+        lang: init::InitLang,
     },
     /// Build screener.wasm and check it against the terminal's rules
     Build {
         #[arg(long, default_value = ".")]
         dir: PathBuf,
     },
-    /// Check manifest.yaml and an already built screener.wasm
+    /// Check manifest.yaml and an already built screener.wasm (and whether the catalog would take it)
     Validate {
         #[arg(long, default_value = ".")]
         dir: PathBuf,
+    },
+    /// Replay recordings headless and compare with the expected rows (recordings/*.json)
+    Test {
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// One recording instead of every file in recordings/
+        file: Option<PathBuf>,
+        /// Accept the current output as expected (rewrite the *.expected.json snapshots)
+        #[arg(long)]
+        update: bool,
+        /// Use the screener.wasm already built instead of building first
+        #[arg(long)]
+        no_build: bool,
+    },
+    /// Restart the screener in the terminal and record its data for `st test`
+    Record {
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// Screener id (default: from manifest.yaml in --dir)
+        #[arg(long)]
+        id: Option<String>,
+        /// How long to record
+        #[arg(long, default_value_t = 60)]
+        seconds: u64,
+        /// Output file (default: recordings/<UTC time>.json)
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Build, install into the running terminal, then rebuild and reinstall on every change
     Dev {
@@ -56,6 +91,29 @@ enum Command {
         /// Do not ask the terminal to open a pane for the screener
         #[arg(long)]
         no_open: bool,
+    },
+    /// Save a publish token (made on the author page of the store) for `st publish`
+    Login {
+        /// The token; read from stdin when omitted
+        #[arg(long)]
+        token: Option<String>,
+        /// Registry URL (default: ST_REGISTRY, then https://store.space-terminal.com)
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Build, check and upload the screener to the catalog; a moderator reviews each version
+    Publish {
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// A recording from `st record` for the trial run and the moderator (≤ 4 MiB)
+        #[arg(long)]
+        recording: Option<PathBuf>,
+        /// Publish the screener.wasm already built instead of building first
+        #[arg(long)]
+        no_build: bool,
+        /// Registry URL (default: ST_REGISTRY, the one saved by `st login`, the Space Market store)
+        #[arg(long)]
+        registry: Option<String>,
     },
     /// Print the screener log from the terminal
     Logs {
@@ -101,7 +159,12 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Init { path, id, sdk_path } => init::init(&path, id, sdk_path),
+        Command::Init {
+            path,
+            id,
+            sdk_path,
+            lang,
+        } => init::init(&path, id, sdk_path, lang),
         Command::Build { dir } => {
             let built = project::build(&dir)?;
             project::print_summary(&built);
@@ -111,10 +174,30 @@ fn run(cli: Cli) -> Result<()> {
         Command::Validate { dir } => {
             let built = project::validate(&dir)?;
             project::print_summary(&built);
+            project::print_catalog_readiness(&built);
             println!("ok");
             Ok(())
         }
+        Command::Test {
+            dir,
+            file,
+            update,
+            no_build,
+        } => test::run(&dir, file, update, !no_build),
+        Command::Record {
+            dir,
+            id,
+            seconds,
+            out,
+        } => record::run(&dir, id, seconds, out, cli.port),
         Command::Dev { dir, no_open } => dev::run(&dir, cli.port, !no_open),
+        Command::Login { token, registry } => registry::login(token, registry),
+        Command::Publish {
+            dir,
+            recording,
+            no_build,
+            registry,
+        } => registry::publish(&dir, recording, !no_build, registry),
         Command::Logs {
             dir,
             id,

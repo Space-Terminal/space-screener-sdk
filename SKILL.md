@@ -1,11 +1,12 @@
 ---
 name: space-screener
-description: Build Space Terminal screener plugins (Rust → wasm, run in the terminal's sandbox) with the space-screener PDK and the `st` CLI. Use when asked to write, fix or extend a screener, scanner or table of symbols for Space Terminal — for example open interest, funding, volume spikes, top movers — or when working in a folder with manifest.yaml and a space-screener dependency.
+description: Build Space Terminal screener plugins (Rust or TypeScript → wasm, run in the terminal's sandbox) with the space-screener PDK and the `st` CLI, test them on recordings and publish them to the Space Market catalog. Use when asked to write, fix or extend a screener, scanner or table of symbols for Space Terminal — for example open interest, funding, volume spikes, top movers — or when working in a folder with manifest.yaml and a space-screener dependency.
 ---
 
 # Space Terminal screeners
 
-A screener is a small Rust library compiled to `wasm32-unknown-unknown`. Space Terminal runs it in a
+A screener is a small Rust library compiled to `wasm32-unknown-unknown` (or a TypeScript module that
+`st` compiles to the same kind of wasm — see "TypeScript" below). Space Terminal runs it in a
 sandbox and shows its rows as a table pane; clicking a row opens that market's order book. The plugin
 has **no network, files, clock or threads of its own** — it asks the terminal (the *host*) for data
 and HTTP, and hands rows back. The full wire contract is `ABI.md` in the SDK repository.
@@ -32,6 +33,19 @@ and HTTP, and hands rows back. The full wire contract is `ABI.md` in the SDK rep
    CPU budget adds `cpu … ms (… ms in host functions) of … ms, wall … ms`), `st list`
    (status: running / stopped / error / limit). Iterate until rows look right, then tell the user to
    look at the pane and click a row.
+7. **Record and test.** While the plugin runs in a pane: `st record --seconds 120` restarts it and saves
+   its run (the terminal's data replies) to `recordings/<UTC time>.json`. `st test` replays every
+   recording headless — no terminal needed — and compares rows, alerts, status and clicks with
+   `recordings/<file>.expected.json` (the first run writes it; after an intended change
+   `st test --update`). Use it for fast iterations and before publishing; keep recordings small
+   (the registry takes recordings up to 4 MiB). `st test` also fails when a call returns an error,
+   traps or goes over its CPU budget, and prints the plugin's error lines.
+8. **Publish — only when the user asks.** Fill the catalog fields (`categories`, `description`, optional
+   `source`); `st validate` prints `catalog: ready`. The user makes a publish token on the author page
+   of the store (`https://store.space-terminal.com/author`); `st login` saves it once (or `ST_TOKEN`).
+   `st publish --recording recordings/<file>.json` builds, checks, runs a local trial and uploads.
+   Every version waits for a human moderator; its status is on the author page. Raise `version` for
+   every upload.
 
 Terminal discovery: `st` reads the token from `<data>/screeners/local_api_token` and the port from
 `<data>/config/general.yaml` (default 5055). `<data>` is `SPACE_TERMINAL_DIR` or the OS data folder
@@ -137,10 +151,10 @@ Helpers:
 
 ```yaml
 abi: 1
-id: author.oi-8-exchanges        # [a-z0-9._-], 3..64, starts/ends with a letter or digit; not `install`; no con/prn/aux/nul/com1-9/lpt1-9 segment
+id: author.oi-8-exchanges        # [a-z0-9._-], 3..64, starts/ends with a letter or digit; not `install`/`sync`; no con/prn/aux/nul/com1-9/lpt1-9 segment
 version: 0.1.0
 name: {ru: "Открытый интерес", en: "Open interest"}
-lang: rust
+lang: rust                       # or ts (see TypeScript)
 min_terminal: 0.104.70
 http: [fapi.binance.com, api.bybit.com]   # every host you call, bare names, no https://
 timer_ms: 60000                  # 250..=3600000
@@ -152,7 +166,15 @@ columns:
 params:
   - {key: min_oi, type: number, title: {en: "Min OI, $"}, default: 5000000, min: 0}
 limits: {cpu_ms_per_call: 1000}  # parse-heavy screeners (default 250 ms of CPU per call, allowed 50–1000)
+# catalog only (the terminal ignores them; st publish requires them):
+description: {en: "One-side open interest of USDT perpetuals"}   # ≤ 2000 chars, the card text
+categories: [open-interest]      # 1..3 of: volume open-interest funding spread movers listings orderbook other
+source: https://github.com/me/oi # optional link to the code
 ```
+
+`install` and `sync` are reserved ids. A host, column or parameter listed twice is refused; column
+`width` is 1..2000. Versions for the catalog have no build metadata (`1.2.0`, not `1.2.0+b1`), and the
+catalog takes at most 4 MiB of wasm code (`st validate` says so; typical Rust screeners are far below).
 
 Column types: `text number integer percent usd price time duration countdown symbol exchange exchanges bool`.
 `percent` values are already percents (1.5 = 1.5 %); `time`/`countdown` are ms since epoch;
@@ -192,6 +214,7 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | status 301/302 with an empty body | redirects are not followed; call the final URL directly |
 | `bad_request` on http | only `https://`, no `user:pass@` in the URL, `timeout_ms` 1000..=10000 |
 | `forbidden_export` / start section | build a `cdylib` for wasm32-unknown-unknown with `st build`; WASI/C runtimes (`_start`, `_initialize`) are refused |
+| `invalid_wasm: function N: … KiB of code, the limit is 256 KiB per function` (or nesting / br_table) | one enormous function — usually a giant `match` or a table built inline: move the data into a `static`, split the function |
 | `limit` status / cpu overrun | host work for your calls counts too: parse only the fields you need (`#[derive(Deserialize)]` structs, not `serde_json::Value`), emit fewer/smaller rows, raise `limits.cpu_ms_per_call`, cache slow-changing metadata |
 | slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints or rotate groups of exchanges (exchange rate limits are shared with the user's trading IP; `fapi.binance.com` is capped at 5 requests/s) |
 | history (5/15 min changes) resets | every `st dev` reinstall and every crash restarts the plugin; windows fill again from scratch |
@@ -199,6 +222,12 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | `not_in_click` | `open_market` only from `on_click` exported with `export_screener!(T, on_click)` |
 | plugin restarts, `st logs` shows `panic: …` | fix the panic at the logged location (index out of bounds, `unwrap` on `None`, …) |
 | numbers as strings in exchange JSON | parse strings (`"83890.5".parse::<f64>()`) or deserialize with a string-or-number helper |
+| `st test` shows `N not recorded` | the code now calls data functions with inputs the recording does not have (another URL, symbol or exchange): record again |
+| `st test` differs after an intended change | review the diff, then `st test --update` |
+| `st publish`: `not ready for the catalog` | add `categories` and `description` (see Manifest essentials) |
+| `st publish`: `version_exists` / `version_not_greater` | raise `version` in manifest.yaml |
+| `st publish`: `too_many_pending` | the moderator has not looked at the previous uploads yet; wait |
+| `st publish`: `unauthorized` / `token_invalid` | the token was revoked; the user makes a new one on the author page, then `st login` |
 
 ## Example: open interest on 8 exchanges
 
@@ -362,6 +391,48 @@ impl Screener for OiRotating {
 export_screener!(OiRotating);
 ```
 
+## TypeScript
+
+`st init <folder> --lang ts --id <author>.<name>` → `package.json` (esbuild, typescript), `tsconfig.json`,
+`manifest.yaml` (`lang: ts`), `src/index.ts`, `pdk/index.ts` (the PDK — do not edit, `st` writes it).
+`st build` needs Node.js 18+ (it runs `npm install` once, then `tsc --noEmit`) and downloads extism-js and
+binaryen once into the cache; the rest of the workflow (`dev`, `rows`, `logs`, `record`, `test`,
+`publish`) is the same.
+
+```ts
+import { exchanges, num, replaceRows, setStatus, signed, tickers, warn } from "@space-terminal/screener";
+import type { InitInput, Row, TimerInput } from "@space-terminal/screener";
+
+let seen = new Map<string, number>();       // top level: declarations only — it runs at BUILD time
+
+export function init(input: InitInput) {}    // params(), num("key"), str(), bool(), lang() are set here
+
+export function on_timer(input: TimerInput) {
+  const rows: Row[] = [];
+  for (const ex of exchanges()) {
+    if (!ex.connected || ex.market !== "futures") continue;
+    for (const t of tickers(ex.exchange, ex.market).tickers) {
+      rows.push({ key: `${ex.exchange}:${t.symbol}`, exchange: ex.exchange, market: ex.market, symbol: t.symbol,
+                  cells: { symbol: t.symbol, change: signed(t.change_pct), last: t.last } });
+    }
+  }
+  replaceRows(rows);
+  setStatus("ok", `${rows.length} rows`);
+}
+```
+
+- Export only `init` and `on_timer` (required), `on_click`, `on_params`; put helpers in other files.
+- Host calls are synchronous and throw `HostError` (`e.code`): `http`, `httpBatch`, `tickers`, `symbols`,
+  `exchanges`, `historyCluster`, `historyReplay`, `kvGet`, `kvSet`, `emitRows`, `replaceRows`, `expire`,
+  `alert`, `setStatus`, `openMarket`, `openSpread`, `log`/`debug`/`info`/`warn`/`error`, `nowMs`;
+  helpers `Series`, `secs`/`mins`/`hours`, `signed`, `muted`, `toned`, `row`.
+- `fetch(url)` works for hosts in manifest `http` (it goes through `http`); `console.log` goes to `st logs`.
+  An `async` export is fine: a rejected promise is reported as a failed call.
+- Top level runs once when `st build` snapshots the module: a host call there fails the build
+  (`move host calls … into init/on_timer`), `Date.now()` there is the build time.
+- `Math.random` is a seeded PRNG, not crypto. QuickJS is ~10× slower than Rust: keep per-call work small
+  or raise `limits.cpu_ms_per_call`. Example: `examples/volume-spike`.
+
 ## Done checklist
 
 - `st build` passes with no errors; `st dev` shows `installed …`. The first install prints
@@ -369,3 +440,4 @@ export_screener!(OiRotating);
   second later — `st list` then shows `running`.
 - `st rows` shows the expected rows and `st logs` has no repeating errors; `st list` status is `running`.
 - Rows carry `symbol`/`exchange`/`market` so a click opens the order book; tell the user to click one.
+- If the project has `recordings/`, `st test` passes.
