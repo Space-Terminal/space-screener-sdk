@@ -38,7 +38,8 @@ and HTTP, and hands rows back. The full wire contract is `ABI.md` in the SDK rep
    recording headless — no terminal needed — and compares rows, alerts, status and clicks with
    `recordings/<file>.expected.json` (the first run writes it; after an intended change
    `st test --update`). Use it for fast iterations and before publishing; keep recordings small
-   (the registry takes ≤ 4 MiB).
+   (the registry takes recordings up to 4 MiB). `st test` also fails when a call returns an error,
+   traps or goes over its CPU budget, and prints the plugin's error lines.
 8. **Publish — only when the user asks.** Fill the catalog fields (`categories`, `description`, optional
    `source`); `st validate` prints `catalog: ready`. The user makes a publish token on the author page
    of the store (`https://store.space-terminal.com/author`); `st login` saves it once (or `ST_TOKEN`).
@@ -150,10 +151,10 @@ Helpers:
 
 ```yaml
 abi: 1
-id: author.oi-8-exchanges        # [a-z0-9._-], 3..64, starts/ends with a letter or digit; not `install`; no con/prn/aux/nul/com1-9/lpt1-9 segment
+id: author.oi-8-exchanges        # [a-z0-9._-], 3..64, starts/ends with a letter or digit; not `install`/`sync`; no con/prn/aux/nul/com1-9/lpt1-9 segment
 version: 0.1.0
 name: {ru: "Открытый интерес", en: "Open interest"}
-lang: rust
+lang: rust                       # or ts (see TypeScript)
 min_terminal: 0.104.70
 http: [fapi.binance.com, api.bybit.com]   # every host you call, bare names, no https://
 timer_ms: 60000                  # 250..=3600000
@@ -172,7 +173,8 @@ source: https://github.com/me/oi # optional link to the code
 ```
 
 `install` and `sync` are reserved ids. A host, column or parameter listed twice is refused; column
-`width` is 1..2000. Versions for the catalog have no build metadata (`1.2.0`, not `1.2.0+b1`).
+`width` is 1..2000. Versions for the catalog have no build metadata (`1.2.0`, not `1.2.0+b1`), and the
+catalog takes at most 4 MiB of wasm code (`st validate` says so; typical Rust screeners are far below).
 
 Column types: `text number integer percent usd price time duration countdown symbol exchange exchanges bool`.
 `percent` values are already percents (1.5 = 1.5 %); `time`/`countdown` are ms since epoch;

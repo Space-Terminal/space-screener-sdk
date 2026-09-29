@@ -28,17 +28,33 @@ The terminal rejects a module (`forbidden_import`) that imports anything outside
 Extism's own `http_request`, `log_*`, `get_log_level` and any `wasi_*` import are refused. With the
 Rust PDK use `extism-pdk = { version = "1.4.1", default-features = false }` (the PDK crate already does).
 
-Only functions may be imported (no memories, tables, globals or tags), and every host function is
-declared `(i64) -> i64`: an Extism memory offset in, an offset out.
+Only functions may be imported (no memories, tables, globals or tags), each with its exact signature,
+or the module is refused (`forbidden_import`) — a mismatch would otherwise fail only when the terminal
+links it:
+
+- every `extism:host/user` host function: `(i64) -> i64` — an Extism memory offset in, an offset out;
+- `extism:host/env` (the Extism 1.30 kernel, as extism-pdk 1.4.1 declares it):
+
+| Signature | Functions |
+|---|---|
+| `(i64) -> i64` | `alloc`, `length`, `length_unsafe`, `load_u64`, `input_load_u64`, `config_get`, `var_get` |
+| `(i64) -> i32` | `load_u8`, `input_load_u8` |
+| `(i64) -> ()` | `free`, `error_set` |
+| `() -> i64` | `input_length` |
+| `(i64, i32) -> ()` | `store_u8` |
+| `(i64, i64) -> ()` | `store_u64`, `output_set`, `var_set` |
 
 ### Module shape
 
-- The module validates with **WebAssembly 2.0** features only: GC types, threads, memory64,
-  multi-memory, exceptions, tail calls and components are refused (`invalid_wasm`).
+- The module validates with **WebAssembly 2.0** features plus **tail calls** and **extended constant
+  expressions** (they allocate nothing). GC types, threads and shared memory, memory64,
+  multi-memory, exceptions, relaxed SIMD and components are refused (`invalid_wasm`).
 - At most 20 tables holding at most 50 000 elements in total — tables live outside `limits.memory_mb`.
   A table without a declared maximum counts with its initial size and must never be grown with
   `table.grow`.
-- `screener.wasm` is at most 10 MiB.
+- `screener.wasm` is at most 10 MiB. For the Space Market catalog its code section is at most 4 MiB
+  (`too_large`): the registry compiles every version for its trial run, and compiling takes memory in
+  proportion to the code. A Rust screener is typically 150–300 KiB of code, a TypeScript one about 1 MiB.
 
 ### Refused exports
 
@@ -326,7 +342,7 @@ from the author page of the store) and `{manifest, wasm_b64, recording?}`:
   the plugin headless (`init` and three `on_timer`, 20 s of wall time at most) on the recording, or on a
   small offline data set without network when there is none. The report (verdict ok/warn/fail, issues,
   sample rows, log lines ≤ 4096 bytes each, ≤ 256 KiB in total) goes to the moderator.
-- Limits: manifest ≤ 64 KiB, module ≤ 10 MiB, recording ≤ 4 MiB; at most 3 versions of one screener
+- Limits: manifest ≤ 64 KiB, module ≤ 10 MiB with a code section ≤ 4 MiB, recording ≤ 4 MiB; at most 3 versions of one screener
   and 10 of one author waiting for moderation (`too_many_pending`).
 - An id belongs to the first author who publishes it (`id_taken`); versions only grow (`version_exists`,
   `version_not_greater`).
