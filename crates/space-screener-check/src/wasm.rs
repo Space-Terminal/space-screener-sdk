@@ -132,6 +132,18 @@ fn wat_signature((params, results): (&[ValType], &[ValType])) -> String {
 pub const MAX_TABLES: usize = 20;
 pub const MAX_TABLE_ELEMENTS: u64 = 50_000;
 
+/// Compiling takes memory in proportion to the largest function, not to the whole module:
+/// about 1 KiB per byte of body in the worst shapes (if/else chains, br_table targets), once
+/// per function compiled at the same time. Measured on wasmtime 43 (Cranelift), compiling one
+/// function at a time, a module at every limit below peaks at ~250 MiB and takes ~1.5 s.
+/// Real modules: at most 1 566 functions, 50 793-byte bodies, nesting 293 and 254 br_table
+/// targets (the extism-js QuickJS build) — ×4 to ×39 below the limits.
+pub const MAX_FUNCTIONS: usize = 10_000;
+pub const MAX_FUNCTION_BYTES: usize = 256 * 1024;
+/// Blocks, loops, ifs and try_tables open at once inside one function.
+pub const MAX_NESTING: u32 = 2_000;
+pub const MAX_BR_TABLE_TARGETS: usize = 10_000;
+
 /// Code that wasmtime/Extism run at instantiation, before the host has a cancel handle: an
 /// endless loop there cannot be interrupted. Refused under any export kind.
 pub const FORBIDDEN_EXPORTS: &[&str] = &["_start", "_initialize", "__wasm_call_ctors", "hs_init"];
@@ -201,6 +213,8 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
     let mut imported_tables = 0u32;
     let mut tables: Vec<(u64, Option<u64>)> = Vec::new();
     let mut grown: BTreeSet<u32> = BTreeSet::new();
+    let mut imported_funcs = 0u32;
+    let mut shape = Shape::default();
     for payload in Parser::new(0).parse_all(bytes) {
         let payload = match payload {
             Ok(payload) => payload,
@@ -258,6 +272,7 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
                     }
                     match import.ty {
                         TypeRef::Func(index) => {
+                            imported_funcs += 1;
                             let expected = expected_signature(import.module, import.name);
                             let declared = func_types.get(index as usize).and_then(Option::as_ref);
                             if let Some(expected) = expected
@@ -308,8 +323,14 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
                     }
                 }
             }
-            Payload::CodeSectionStart { range, .. } => info.code_bytes = range.len(),
+            Payload::CodeSectionStart { range, count, .. } => {
+                info.code_bytes = range.len();
+                shape.functions = count as usize;
+            }
             Payload::CodeSectionEntry(body) => {
+                let function = imported_funcs + shape.seen;
+                shape.seen += 1;
+                shape.body(function, body.range().len());
                 let mut operators = match body.get_operators_reader() {
                     Ok(operators) => operators,
                     Err(e) => {
@@ -317,10 +338,24 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
                         return Err(r);
                     }
                 };
+                let mut depth = 0u32;
                 while !operators.eof() {
                     match operators.read() {
                         Ok(Operator::TableGrow { table }) => {
                             grown.insert(table);
+                        }
+                        Ok(
+                            Operator::Block { .. }
+                            | Operator::Loop { .. }
+                            | Operator::If { .. }
+                            | Operator::TryTable { .. },
+                        ) => {
+                            depth += 1;
+                            shape.nesting(function, depth);
+                        }
+                        Ok(Operator::End) => depth = depth.saturating_sub(1),
+                        Ok(Operator::BrTable { targets }) => {
+                            shape.br_table(function, targets.len() as usize);
                         }
                         Ok(_) => {}
                         Err(e) => {
@@ -363,6 +398,7 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
         }
     }
     check_tables(&tables, imported_tables, &grown, &mut r);
+    shape.check(&mut r);
 
     for required in REQUIRED_EXPORTS {
         if !info.exports.iter().any(|export| export == required) {
@@ -381,6 +417,87 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
     info.on_click = info.exports.iter().any(|export| export == "on_click");
     info.on_params = info.exports.iter().any(|export| export == "on_params");
     Ok(info)
+}
+
+/// The largest function body, nesting and br_table of a module, with the function holding each.
+#[derive(Debug, Default)]
+struct Shape {
+    functions: usize,
+    seen: u32,
+    largest: (usize, u32),
+    over_bytes: usize,
+    deepest: (u32, u32),
+    over_nesting: usize,
+    widest: (usize, u32),
+    over_br_table: usize,
+}
+
+impl Shape {
+    fn body(&mut self, function: u32, bytes: usize) {
+        if bytes > self.largest.0 {
+            self.largest = (bytes, function);
+        }
+        if bytes > MAX_FUNCTION_BYTES {
+            self.over_bytes += 1;
+        }
+    }
+
+    fn nesting(&mut self, function: u32, depth: u32) {
+        if depth > self.deepest.0 {
+            self.deepest = (depth, function);
+        }
+        if depth == MAX_NESTING + 1 {
+            self.over_nesting += 1;
+        }
+    }
+
+    fn br_table(&mut self, function: u32, targets: usize) {
+        if targets > self.widest.0 {
+            self.widest = (targets, function);
+        }
+        if targets > MAX_BR_TABLE_TARGETS {
+            self.over_br_table += 1;
+        }
+    }
+
+    fn check(&self, r: &mut Report) {
+        if self.functions > MAX_FUNCTIONS {
+            r.error(
+                Code::InvalidWasm,
+                "functions",
+                format!("{} functions, the limit is {MAX_FUNCTIONS}", self.functions),
+            );
+        }
+        let (bytes, function) = self.largest;
+        if self.over_bytes > 0 {
+            r.error(
+                Code::InvalidWasm,
+                format!("function {function}"),
+                format!(
+                    "{} KiB of code, the limit is {} KiB per function ({} over it); split it up",
+                    bytes.div_ceil(1024),
+                    MAX_FUNCTION_BYTES / 1024,
+                    self.over_bytes
+                ),
+            );
+        }
+        let (depth, function) = self.deepest;
+        if self.over_nesting > 0 {
+            r.error(
+                Code::InvalidWasm,
+                format!("function {function}"),
+                format!("blocks nest {depth} deep, the limit is {MAX_NESTING}"),
+            );
+        }
+        let (targets, function) = self.widest;
+        if self.over_br_table > 0 {
+            r.error(
+                Code::InvalidWasm,
+                format!("function {function}"),
+                format!("a br_table has {targets} targets, the limit is {MAX_BR_TABLE_TARGETS}"),
+            );
+        }
+    }
 }
 
 fn is_component(bytes: &[u8]) -> bool {
@@ -722,6 +839,67 @@ mod tests {
         }
         let shared = report(&format!("(memory 1 1 shared) {ENTRY}"));
         assert!(shared.contains("may not use (GC, threads"), "{shared}");
+    }
+
+    #[test]
+    fn function_count_is_capped() {
+        let tiny = |n: usize| "(func)".repeat(n);
+        assert!(inspect(&module(&format!("{} {ENTRY}", tiny(MAX_FUNCTIONS - 2)))).is_ok());
+        let problems = report(&format!("{} {ENTRY}", tiny(MAX_FUNCTIONS - 1)));
+        assert!(
+            problems.contains("10001 functions, the limit is 10000"),
+            "{problems}"
+        );
+    }
+
+    #[test]
+    fn function_bodies_are_capped() {
+        let body = |n: usize| format!("(func {})", "nop ".repeat(n));
+        // A body is its locals vector (1 byte), the code and `end` (1 byte).
+        assert!(
+            inspect(&module(&format!(
+                "{} {ENTRY}",
+                body(MAX_FUNCTION_BYTES - 2)
+            )))
+            .is_ok()
+        );
+        let problems = report(&format!("{} {ENTRY}", body(MAX_FUNCTION_BYTES - 1)));
+        assert!(
+            problems.contains(
+                "function 0: 257 KiB of code, the limit is 256 KiB per function (1 over it)"
+            ),
+            "{problems}"
+        );
+    }
+
+    #[test]
+    fn nesting_is_capped() {
+        let nested = |n: u32| {
+            let n = n as usize;
+            format!("(func {} {})", "(block ".repeat(n), ")".repeat(n))
+        };
+        assert!(inspect(&module(&format!("{} {ENTRY}", nested(MAX_NESTING)))).is_ok());
+        let problems = report(&format!("{ENTRY} {}", nested(MAX_NESTING + 1)));
+        assert!(
+            problems.contains("function 2: blocks nest 2001 deep, the limit is 2000"),
+            "{problems}"
+        );
+    }
+
+    #[test]
+    fn br_table_targets_are_capped() {
+        let table = |n: usize| {
+            format!(
+                "(func (block (br_table {} (i32.const 0))))",
+                "0 ".repeat(n + 1)
+            )
+        };
+        assert!(inspect(&module(&format!("{} {ENTRY}", table(MAX_BR_TABLE_TARGETS)))).is_ok());
+        let problems = report(&format!("{} {ENTRY}", table(MAX_BR_TABLE_TARGETS + 1)));
+        assert!(
+            problems.contains("function 0: a br_table has 10001 targets, the limit is 10000"),
+            "{problems}"
+        );
     }
 
     #[test]
