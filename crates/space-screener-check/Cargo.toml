@@ -1,0 +1,22 @@
+[package]
+name = "space-screener-check"
+description = "Shared rules for Space Terminal screener plugins: manifest, wasm imports/exports, registry fields"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+rust_decimal = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+wasmparser = { workspace = true }
+
+[dev-dependencies]
+wat = { workspace = true }
+
+[lints]
+workspace = true
