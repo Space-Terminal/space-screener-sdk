@@ -21,75 +21,162 @@ struct Artifact {
 
 struct Platform {
     extism_js: Artifact,
+    /// sha256 of the unpacked `extism-js` binary.
+    extism_js_binary: &'static str,
     binaryen: Artifact,
+    /// Files of the unpacked binaryen that run, relative to its root, with their sha256.
+    binaryen_files: &'static [(&'static str, &'static str)],
 }
 
-fn platform() -> Result<Platform> {
-    let (extism_js, binaryen) = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => (
-            (
-                "extism-js-aarch64-macos-v1.7.0.gz",
-                "12c01c2bb2240a6a05a4f8babe680c793c397d84e6a1497a7ca1312e78a475c3",
-            ),
-            (
-                "binaryen-version_133-arm64-macos.tar.gz",
-                "ad66da82ac13f163e424b1643f16c6dfcccc98b5966296b43e52d3cab04f84a8",
-            ),
+const MACOS_ARM64: Platform = Platform {
+    extism_js: Artifact {
+        name: "extism-js-aarch64-macos-v1.7.0.gz",
+        sha256: "12c01c2bb2240a6a05a4f8babe680c793c397d84e6a1497a7ca1312e78a475c3",
+    },
+    extism_js_binary: "e113a396c950a68b81f5acb2f3c42d7bc389996197bd58a16da6f9e1ca5731c3",
+    binaryen: Artifact {
+        name: "binaryen-version_133-arm64-macos.tar.gz",
+        sha256: "ad66da82ac13f163e424b1643f16c6dfcccc98b5966296b43e52d3cab04f84a8",
+    },
+    binaryen_files: &[
+        (
+            "bin/wasm-merge",
+            "c41e8ffbed5ff46448109fa286e1e97ac55623648f1f3428652887b47a8b699f",
         ),
-        ("macos", "x86_64") => (
-            (
-                "extism-js-x86_64-macos-v1.7.0.gz",
-                "cce4a756eceb34b5aaac5ea864607d6c8b0610535e2c1b0c05a96bdbda69c7bb",
-            ),
-            (
-                "binaryen-version_133-x86_64-macos.tar.gz",
-                "13a9b90be775c6389ce3d1f879cb8627bea56708ba8c122983941d53a8199b95",
-            ),
+        (
+            "bin/wasm-metadce",
+            "61c8497824813e6d7631c52c5c9e57a71f8528863397fa7781f7a0c8c65b08f4",
         ),
-        ("linux", "x86_64") => (
-            (
-                "extism-js-x86_64-linux-v1.7.0.gz",
-                "63b72da2f5e88655522dc21477de549f238a2f40546a69ce4e0fce7e78654035",
-            ),
-            (
-                "binaryen-version_133-x86_64-linux.tar.gz",
-                "2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489",
-            ),
+        (
+            "bin/wasm-opt",
+            "81041e09f332df94db1c2009a64d8f3b85f0431a2c920ccd014d3ceebb343402",
         ),
-        ("linux", "aarch64") => (
-            (
-                "extism-js-aarch64-linux-v1.7.0.gz",
-                "025f4050b199d68413c159bde1187271ae270021a9f7171e7beb509922821f2a",
-            ),
-            (
-                "binaryen-version_133-aarch64-linux.tar.gz",
-                "89c07ea56faf38d0fbecf36ca8ec0721756716185f265b568e133d427f299bf8",
-            ),
+        (
+            "lib/libbinaryen.dylib",
+            "61055e190d84d5db6d1dec63456e0c24dad324ecfd4d2e23740dca217ed89e5a",
         ),
-        ("windows", "x86_64") => (
-            (
-                "extism-js-x86_64-windows-v1.7.0.gz",
-                "409ac023f88f79d763fbf9dd5bb5d9b2fd595ac452e0822d49bf7d05bf6794be",
-            ),
-            (
-                "binaryen-version_133-x86_64-windows.tar.gz",
-                "17a2cbeac6b5693c5fbafab3838d3c65fd9c1eb38b05f5baec6c657e8c84995b",
-            ),
+    ],
+};
+
+const MACOS_X64: Platform = Platform {
+    extism_js: Artifact {
+        name: "extism-js-x86_64-macos-v1.7.0.gz",
+        sha256: "cce4a756eceb34b5aaac5ea864607d6c8b0610535e2c1b0c05a96bdbda69c7bb",
+    },
+    extism_js_binary: "938e9727735811e2214fc991214b11dfa2591d98fa0c286df16319c34764c559",
+    binaryen: Artifact {
+        name: "binaryen-version_133-x86_64-macos.tar.gz",
+        sha256: "13a9b90be775c6389ce3d1f879cb8627bea56708ba8c122983941d53a8199b95",
+    },
+    binaryen_files: &[
+        (
+            "bin/wasm-merge",
+            "ced52080987874f99b96abe15a3a7b5cb3c72f661a8413daea09a8a379d512b9",
         ),
+        (
+            "bin/wasm-metadce",
+            "d4fb48c633e0eceacba9d28c96ce778f7f6cd5f52710e5fc2faec9bb5ee5f411",
+        ),
+        (
+            "bin/wasm-opt",
+            "e26344b1d0d0986ac4a1090f58e478470eb2a52ba0625ae9a0f880511bb31d51",
+        ),
+        (
+            "lib/libbinaryen.dylib",
+            "26388343133e968f58c18807552b83c43944d11cf512e3920798890adc554f38",
+        ),
+    ],
+};
+
+const LINUX_X64: Platform = Platform {
+    extism_js: Artifact {
+        name: "extism-js-x86_64-linux-v1.7.0.gz",
+        sha256: "63b72da2f5e88655522dc21477de549f238a2f40546a69ce4e0fce7e78654035",
+    },
+    extism_js_binary: "bf15c04c89976431fd05f285e2d20c0f4de379308699be394097fac8321bc377",
+    binaryen: Artifact {
+        name: "binaryen-version_133-x86_64-linux.tar.gz",
+        sha256: "2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489",
+    },
+    binaryen_files: &[
+        (
+            "bin/wasm-merge",
+            "4b55992e09b833bcc6719dbc0540783dfdb05dba319c03eb1059ade20211c957",
+        ),
+        (
+            "bin/wasm-metadce",
+            "1a47c3bb9e82fc0b49ab6a394eb76ac6470611764878a026d2ad5838d16b67a8",
+        ),
+        (
+            "bin/wasm-opt",
+            "8f25e9fd5db0fc5f210003aaa432922feb2e52d309e430def2f929e34da9466b",
+        ),
+    ],
+};
+
+const LINUX_ARM64: Platform = Platform {
+    extism_js: Artifact {
+        name: "extism-js-aarch64-linux-v1.7.0.gz",
+        sha256: "025f4050b199d68413c159bde1187271ae270021a9f7171e7beb509922821f2a",
+    },
+    extism_js_binary: "a1993ddd49fd39ce53c9308bb80b8c6da4ade045402375dfc18a059228c52cb9",
+    binaryen: Artifact {
+        name: "binaryen-version_133-aarch64-linux.tar.gz",
+        sha256: "89c07ea56faf38d0fbecf36ca8ec0721756716185f265b568e133d427f299bf8",
+    },
+    binaryen_files: &[
+        (
+            "bin/wasm-merge",
+            "4b000fc39b1cf0f5a49bc09a043839d0e034cd93ae7bd6e2809543254e959ecf",
+        ),
+        (
+            "bin/wasm-metadce",
+            "45c2dc610a5590724b43a5e7cbbfbd36d79037f2792caf84a0446650211159d2",
+        ),
+        (
+            "bin/wasm-opt",
+            "e5a823487bb83ed522625cc5d9c383e94e0479bfdb1ba387a387505df27daa6a",
+        ),
+    ],
+};
+
+const WINDOWS_X64: Platform = Platform {
+    extism_js: Artifact {
+        name: "extism-js-x86_64-windows-v1.7.0.gz",
+        sha256: "409ac023f88f79d763fbf9dd5bb5d9b2fd595ac452e0822d49bf7d05bf6794be",
+    },
+    extism_js_binary: "f72d5bc7837a4541a91b783093c87f85ed10d8cd0acdb2d36f8d3b4edaac3a78",
+    binaryen: Artifact {
+        name: "binaryen-version_133-x86_64-windows.tar.gz",
+        sha256: "17a2cbeac6b5693c5fbafab3838d3c65fd9c1eb38b05f5baec6c657e8c84995b",
+    },
+    binaryen_files: &[
+        (
+            "bin/wasm-merge.exe",
+            "5a57d1af6de3bafd85756605eb91eb9907c59de312fad9b8a8b558d4333af632",
+        ),
+        (
+            "bin/wasm-metadce.exe",
+            "db1c519448a524ddb7ead698676abdf9c907b9d279b6049806b89fc35ef40796",
+        ),
+        (
+            "bin/wasm-opt.exe",
+            "4217d75f81cf33c4032d82b5d531120069af1a4b43eb7737977bdb2c99a8f4ba",
+        ),
+    ],
+};
+
+fn platform() -> Result<&'static Platform> {
+    Ok(match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => &MACOS_ARM64,
+        ("macos", "x86_64") => &MACOS_X64,
+        ("linux", "x86_64") => &LINUX_X64,
+        ("linux", "aarch64") => &LINUX_ARM64,
+        ("windows", "x86_64") => &WINDOWS_X64,
         (os, arch) => bail!(
             "TypeScript screeners need extism-js and binaryen, which publish no build for {os}/{arch}; \
              write the screener in Rust or build on macOS, Linux (x86_64/arm64) or Windows x86_64"
         ),
-    };
-    Ok(Platform {
-        extism_js: Artifact {
-            name: extism_js.0,
-            sha256: extism_js.1,
-        },
-        binaryen: Artifact {
-            name: binaryen.0,
-            sha256: binaryen.1,
-        },
     })
 }
 
@@ -119,8 +206,12 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
 fn verify(bytes: &[u8], artifact: &Artifact) -> Result<()> {
-    let actual = hex(&Sha256::digest(bytes));
+    let actual = sha256_hex(bytes);
     if actual != artifact.sha256 {
         bail!(
             "{}: sha256 {actual} does not match the pinned {}; the download is corrupt or was replaced",
@@ -129,6 +220,25 @@ fn verify(bytes: &[u8], artifact: &Artifact) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// `Ok(false)` for a missing file or a different hash: the cache is incomplete or was tampered
+/// with, and gets downloaded again.
+fn file_matches(path: &Path, sha256: &str) -> Result<bool> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(sha256_hex(&bytes) == sha256),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(anyhow!(e).context(format!("cannot read {}", path.display()))),
+    }
+}
+
+fn files_match(root: &Path, files: &[(&str, &str)]) -> Result<bool> {
+    for (file, sha256) in files {
+        if !file_matches(&root.join(file), sha256)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn download(url: &str, artifact: &Artifact) -> Result<Vec<u8>> {
@@ -175,12 +285,19 @@ fn make_executable(_: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_extism_js(cache: &Path, artifact: &Artifact) -> Result<PathBuf> {
+fn ensure_extism_js(cache: &Path, platform: &Platform) -> Result<PathBuf> {
     let dir = cache.join(format!("extism-js-{EXTISM_JS_VERSION}"));
     let exe = dir.join(format!("extism-js{}", std::env::consts::EXE_SUFFIX));
-    if exe.is_file() {
+    if file_matches(&exe, platform.extism_js_binary)? {
         return Ok(exe);
     }
+    if exe.exists() {
+        eprintln!(
+            "warning: {} does not match its pinned hash; downloading it again",
+            exe.display()
+        );
+    }
+    let artifact = &platform.extism_js;
     let url = format!(
         "https://github.com/extism/js-pdk/releases/download/v{EXTISM_JS_VERSION}/{}",
         artifact.name
@@ -190,6 +307,12 @@ fn ensure_extism_js(cache: &Path, artifact: &Artifact) -> Result<PathBuf> {
     GzDecoder::new(gz.as_slice())
         .read_to_end(&mut binary)
         .with_context(|| format!("cannot unpack {}", artifact.name))?;
+    if sha256_hex(&binary) != platform.extism_js_binary {
+        bail!(
+            "{}: the unpacked binary does not match its pinned hash",
+            artifact.name
+        );
+    }
     std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let partial = staging(&exe);
     std::fs::write(&partial, &binary)
@@ -199,19 +322,18 @@ fn ensure_extism_js(cache: &Path, artifact: &Artifact) -> Result<PathBuf> {
     Ok(exe)
 }
 
-fn ensure_binaryen(cache: &Path, artifact: &Artifact) -> Result<PathBuf> {
+fn ensure_binaryen(cache: &Path, platform: &Platform) -> Result<PathBuf> {
     let root = cache.join(format!("binaryen-{BINARYEN_VERSION}"));
-    let bin = root.join("bin");
-    let tools = ["wasm-merge", "wasm-metadce", "wasm-opt"];
-    let complete = |bin: &Path| {
-        tools.iter().all(|t| {
-            bin.join(format!("{t}{}", std::env::consts::EXE_SUFFIX))
-                .is_file()
-        })
-    };
-    if complete(&bin) {
-        return Ok(bin);
+    if files_match(&root, platform.binaryen_files)? {
+        return Ok(root.join("bin"));
     }
+    if root.exists() {
+        eprintln!(
+            "warning: {} is incomplete or does not match its pinned hashes; downloading it again",
+            root.display()
+        );
+    }
+    let artifact = &platform.binaryen;
     let url = format!(
         "https://github.com/WebAssembly/binaryen/releases/download/{BINARYEN_VERSION}/{}",
         artifact.name
@@ -229,8 +351,11 @@ fn ensure_binaryen(cache: &Path, artifact: &Artifact) -> Result<PathBuf> {
         .with_context(|| format!("cannot unpack {}", artifact.name))?;
     // The archive holds one folder, `binaryen-version_133/`.
     let unpacked = partial.join(format!("binaryen-{BINARYEN_VERSION}"));
-    if !complete(&unpacked.join("bin")) {
-        bail!("{} does not contain {}", artifact.name, tools.join(", "));
+    if !files_match(&unpacked, platform.binaryen_files)? {
+        bail!(
+            "{}: the unpacked tools do not match their pinned hashes",
+            artifact.name
+        );
     }
     if root.exists() {
         std::fs::remove_dir_all(&root)
@@ -239,18 +364,19 @@ fn ensure_binaryen(cache: &Path, artifact: &Artifact) -> Result<PathBuf> {
     std::fs::rename(&unpacked, &root)
         .with_context(|| format!("cannot install {}", root.display()))?;
     std::fs::remove_dir_all(&partial).ok();
-    Ok(bin)
+    Ok(root.join("bin"))
 }
 
-/// extism-js and binaryen for this OS, downloaded once into the cache and checked by sha256.
+/// extism-js and binaryen for this OS, downloaded once into the cache; the archives and the
+/// unpacked tools are checked against pinned sha256 hashes, the tools on every build.
 pub fn ensure() -> Result<Tools> {
     let platform = platform()?;
     let cache = cache_dir()?;
     std::fs::create_dir_all(&cache)
         .with_context(|| format!("cannot create {}", cache.display()))?;
-    let extism_js = ensure_extism_js(&cache, &platform.extism_js)
+    let extism_js = ensure_extism_js(&cache, platform)
         .map_err(|e| anyhow!("{e:#}\n(set {CACHE_ENV} to use another cache folder)"))?;
-    let binaryen_bin = ensure_binaryen(&cache, &platform.binaryen)?;
+    let binaryen_bin = ensure_binaryen(&cache, platform)?;
     Ok(Tools {
         extism_js,
         binaryen_bin,
@@ -286,7 +412,25 @@ mod tests {
         )) {
             let p = platform().unwrap();
             assert_eq!(p.extism_js.sha256.len(), 64);
+            assert_eq!(p.extism_js_binary.len(), 64);
             assert!(p.binaryen.name.contains(BINARYEN_VERSION));
+            for tool in ["wasm-merge", "wasm-metadce", "wasm-opt"] {
+                let file = format!("bin/{tool}{}", std::env::consts::EXE_SUFFIX);
+                assert!(p.binaryen_files.iter().any(|(f, _)| *f == file), "{file}");
+            }
         }
+    }
+
+    #[test]
+    fn a_changed_or_missing_file_does_not_match() {
+        let dir = std::env::temp_dir().join(format!("st-toolchain-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("bin/tool"), b"hello").unwrap();
+        let hello = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        assert!(files_match(&dir, &[("bin/tool", hello)]).unwrap());
+        std::fs::write(dir.join("bin/tool"), b"hellO").unwrap();
+        assert!(!files_match(&dir, &[("bin/tool", hello)]).unwrap());
+        assert!(!files_match(&dir, &[("lib/missing.dylib", hello)]).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
