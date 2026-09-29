@@ -2,7 +2,9 @@ mod dev;
 mod init;
 mod manifest;
 mod project;
+mod record;
 mod terminal;
+mod test;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -48,6 +50,33 @@ enum Command {
     Validate {
         #[arg(long, default_value = ".")]
         dir: PathBuf,
+    },
+    /// Replay recordings headless and compare with the expected rows (recordings/*.json)
+    Test {
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// One recording instead of every file in recordings/
+        file: Option<PathBuf>,
+        /// Accept the current output as expected (rewrite the *.expected.json snapshots)
+        #[arg(long)]
+        update: bool,
+        /// Use the screener.wasm already built instead of building first
+        #[arg(long)]
+        no_build: bool,
+    },
+    /// Restart the screener in the terminal and record its data for `st test`
+    Record {
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// Screener id (default: from manifest.yaml in --dir)
+        #[arg(long)]
+        id: Option<String>,
+        /// How long to record
+        #[arg(long, default_value_t = 60)]
+        seconds: u64,
+        /// Output file (default: recordings/<UTC time>.json)
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Build, install into the running terminal, then rebuild and reinstall on every change
     Dev {
@@ -114,6 +143,18 @@ fn run(cli: Cli) -> Result<()> {
             println!("ok");
             Ok(())
         }
+        Command::Test {
+            dir,
+            file,
+            update,
+            no_build,
+        } => test::run(&dir, file, update, !no_build),
+        Command::Record {
+            dir,
+            id,
+            seconds,
+            out,
+        } => record::run(&dir, id, seconds, out, cli.port),
         Command::Dev { dir, no_open } => dev::run(&dir, cli.port, !no_open),
         Command::Logs {
             dir,

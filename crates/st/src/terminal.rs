@@ -8,6 +8,7 @@ use reqwest::blocking::{Client, RequestBuilder};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use space_screener_check::Recording;
 
 pub const DEFAULT_PORT: u16 = 5055;
 pub const DIR_ENV: &str = "SPACE_TERMINAL_DIR";
@@ -128,6 +129,18 @@ pub struct Rows {
     pub rows: Vec<Value>,
 }
 
+/// `GET /api/v1/screeners/{id}/record`: `recording` until the time is up, then `done` with the
+/// recording; `none` when the terminal has no recording for the screener.
+#[derive(Debug, Deserialize)]
+pub struct RecordState {
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub remaining_ms: Option<u64>,
+    #[serde(default)]
+    pub recording: Option<Recording>,
+}
+
 pub struct Terminal {
     port: u16,
     port_source: String,
@@ -236,6 +249,19 @@ impl Terminal {
 
     pub fn rows(&self, id: &str) -> Result<Rows> {
         self.send(self.client.get(self.url(&format!("/{id}/rows"))))
+    }
+
+    /// Restarts the screener and records its run for `seconds`.
+    pub fn record_start(&self, id: &str, seconds: u64) -> Result<Value> {
+        self.send(
+            self.client
+                .post(self.url(&format!("/{id}/record")))
+                .json(&json!({ "seconds": seconds })),
+        )
+    }
+
+    pub fn record_state(&self, id: &str) -> Result<RecordState> {
+        self.send(self.client.get(self.url(&format!("/{id}/record"))))
     }
 
     /// The rows response exactly as the terminal sent it.
