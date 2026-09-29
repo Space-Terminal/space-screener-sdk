@@ -1,0 +1,13 @@
+{
+  "name": "volume-spike",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "st build",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}

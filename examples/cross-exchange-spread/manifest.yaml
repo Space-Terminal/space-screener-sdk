@@ -1,0 +1,27 @@
+abi: 1
+id: space.cross-exchange-spread
+version: 0.1.0
+name: {ru: "Спред между биржами", en: "Cross-exchange spread"}
+description:
+  ru: "Одна и та же пара на разных подключённых биржах: где дешевле, где дороже и разница в процентах по последним ценам снимков тикеров (обновляются раз в несколько секунд). Клик открывает спред двух ног"
+  en: "The same pair on different connected exchanges: where it is cheaper, where it is dearer and the gap in percent, from the last prices of the ticker snapshots (refreshed every few seconds). A click opens the spread of the two legs"
+lang: rust
+categories: [spread]
+source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/cross-exchange-spread
+min_terminal: 0.104.70
+http: []
+timer_ms: 5000
+columns:
+  - {key: symbol, type: symbol, title: {ru: "Пара", en: "Pair"}}
+  - {key: spread, type: percent, title: {ru: "Спред", en: "Spread"}, sort: desc}
+  - {key: buy, type: exchange, title: {ru: "Дешевле", en: "Cheaper"}}
+  - {key: buy_price, type: price, title: {ru: "Цена", en: "Price"}}
+  - {key: sell, type: exchange, title: {ru: "Дороже", en: "Dearer"}}
+  - {key: sell_price, type: price, title: {ru: "Цена", en: "Price"}}
+  - {key: venues, type: exchanges, title: {ru: "Где торгуется", en: "Listed on"}}
+params:
+  - {key: market, type: select, title: {ru: "Рынок", en: "Market"}, default: futures, options: [futures, spot]}
+  - {key: min_volume, type: number, title: {ru: "Мин. объём ноги, $", en: "Min leg volume, $"}, default: 1000000, min: 0}
+  - {key: min_spread, type: number, title: {ru: "Мин. спред, %", en: "Min spread, %"}, default: 0.1, min: 0}
+  - {key: max_spread, type: number, title: {ru: "Макс. спред, % (отсекает разные монеты под одним тикером)", en: "Max spread, % (drops different coins under one ticker)"}, default: 20, min: 0}
+  - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 200, min: 1, max: 2000}

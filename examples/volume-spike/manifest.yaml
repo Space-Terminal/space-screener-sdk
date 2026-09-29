@@ -1,0 +1,28 @@
+abi: 1
+id: space.volume-spike
+version: 0.1.0
+name: {ru: "Всплеск объёма", en: "Volume spike"}
+description:
+  ru: "Во сколько раз оборот за последние минуты выше среднего за сутки, по снимкам тикеров подключённых бирж. Это приближение: биржи отдают только скользящий объём за 24 часа, и оценка его прироста за окно ошибается, если сутки назад в то же время торговали необычно много или мало"
+  en: "How many times the turnover of the last minutes exceeds the 24h average, from the ticker snapshots of connected exchanges. An approximation: exchanges only report a rolling 24h volume, and the estimate of its growth over the window is off when trading was unusually heavy or light at the same time a day ago"
+lang: ts
+categories: [volume]
+source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/volume-spike
+min_terminal: 0.104.70
+http: []
+timer_ms: 10000
+columns:
+  - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
+  - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
+  - {key: ratio, type: number, title: {ru: "× к среднему", en: "× average"}, sort: desc}
+  - {key: recent, type: usd, title: {ru: "Оборот за окно", en: "Window turnover"}}
+  - {key: volume, type: usd, title: {ru: "Объём 24ч", en: "24h volume"}}
+  - {key: change, type: percent, title: {ru: "Изм. 24ч", en: "24h change"}}
+  - {key: last, type: price, title: {ru: "Цена", en: "Last"}}
+params:
+  - {key: market, type: select, title: {ru: "Рынок", en: "Market"}, default: futures, options: [futures, spot]}
+  - {key: window_min, type: integer, title: {ru: "Окно, мин", en: "Window, min"}, default: 5, min: 1, max: 60}
+  - {key: threshold, type: number, title: {ru: "Порог, × к среднему", en: "Threshold, × average"}, default: 3, min: 1}
+  - {key: min_volume, type: number, title: {ru: "Мин. объём 24ч, $", en: "Min 24h volume, $"}, default: 5000000, min: 0}
+  - {key: alerts, type: bool, title: {ru: "Алерт при новом всплеске", en: "Alert on a new spike"}, default: false}
+  - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 100, min: 1, max: 1000}
