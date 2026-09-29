@@ -1,41 +1,47 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
+use space_screener_check::wasm::ENTRY_POINTS;
+use space_screener_check::{Lang, Manifest, Report, WasmInfo};
 
-use crate::imports::{self, Module};
-use crate::manifest::{self, Manifest};
+use crate::manifest;
 
 pub const WASM_TARGET: &str = "wasm32-unknown-unknown";
-pub const WASM_FILE: &str = "screener.wasm";
+pub const WASM_FILE: &str = space_screener_check::wasm::FILE;
 
 pub struct Built {
     pub manifest_text: String,
     pub manifest: Manifest,
     pub wasm: Vec<u8>,
-    pub module: Module,
+    pub module: WasmInfo,
+}
+
+fn problems(report: &Report) -> String {
+    report
+        .errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n  ")
 }
 
 pub fn check_manifest(dir: &Path) -> Result<(String, Manifest)> {
-    let (text, manifest) = manifest::read(dir)?;
-    let report = manifest::validate(&manifest);
+    let text = manifest::read(dir)?;
+    let (manifest, report) = Manifest::check(&text);
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
     }
-    if !report.errors.is_empty() {
-        bail!("manifest.yaml:\n  {}", report.errors.join("\n  "));
+    match manifest {
+        Some(manifest) if report.is_ok() => Ok((text, manifest)),
+        _ => bail!("{}:\n  {}", manifest::FILE, problems(&report)),
     }
-    Ok((text, manifest))
 }
 
-fn check_module(wasm: &[u8]) -> Result<Module> {
-    let module = imports::inspect(wasm)?;
-    let problems = imports::check(wasm, &module);
-    if !problems.is_empty() {
-        bail!("{WASM_FILE}:\n  {}", problems.join("\n  "));
-    }
-    Ok(module)
+fn check_module(wasm: &[u8]) -> Result<WasmInfo> {
+    space_screener_check::inspect(wasm)
+        .map_err(|report| anyhow!("{WASM_FILE}:\n  {}", problems(&report)))
 }
 
 fn ensure_target(dir: &Path) -> Result<()> {
@@ -164,7 +170,7 @@ pub fn print_summary(built: &Built) {
         "{} {} — {} ({} KiB)",
         built.manifest.id,
         built.manifest.version,
-        built.manifest.name.any(),
+        built.manifest.name.get(Lang::En),
         built.wasm.len() / 1024
     );
     println!("imports:");
@@ -176,7 +182,7 @@ pub fn print_summary(built: &Built) {
         .exports
         .iter()
         .map(String::as_str)
-        .filter(|e| ["init", "on_timer", "on_click", "on_params", "on_batch"].contains(e))
+        .filter(|e| ENTRY_POINTS.contains(e))
         .collect();
     println!("entry points: {}", exports.join(", "));
 }
@@ -185,7 +191,5 @@ pub fn screener_id(dir: &Path, explicit: Option<String>) -> Result<String> {
     if let Some(id) = explicit {
         return Ok(id);
     }
-    let (_, manifest) =
-        manifest::read(dir).context("pass --id or run inside a screener project")?;
-    Ok(manifest.id)
+    manifest::read_id(dir).context("pass --id or run inside a screener project")
 }

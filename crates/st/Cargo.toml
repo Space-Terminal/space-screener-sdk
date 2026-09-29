@@ -17,14 +17,10 @@ clap = { workspace = true }
 dirs = { workspace = true }
 notify = { workspace = true }
 reqwest = { workspace = true }
-semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-wasmparser = { workspace = true }
-
-[dev-dependencies]
-wat = { workspace = true }
+space-screener-check = { workspace = true }
 
 [lints]
 workspace = true

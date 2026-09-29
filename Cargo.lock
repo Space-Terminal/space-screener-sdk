@@ -1203,12 +1203,10 @@ dependencies = [
  "dirs",
  "notify",
  "reqwest",
- "semver",
  "serde",
  "serde_json",
  "serde_yaml",
- "wasmparser 0.245.1",
- "wat",
+ "space-screener-check",
 ]
 
 [[package]]

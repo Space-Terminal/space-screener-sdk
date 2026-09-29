@@ -127,7 +127,7 @@ pub fn init(dir: &Path, id: Option<String>, sdk_path: Option<PathBuf>) -> Result
         .unwrap_or("screener")
         .to_string();
     let id = id.unwrap_or_else(|| default_id(&name));
-    if !manifest::is_valid_id(&id) {
+    if !space_screener_check::is_valid_id(&id) {
         bail!(
             "id `{id}` must match {} (pass --id author.name)",
             manifest::ID_RULE
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(type_name("oi-8-exchanges"), "Oi8Exchanges");
         assert_eq!(type_name("8ball"), "Screener8ball");
         assert_eq!(default_id("My Screener"), "local.my-screener");
-        assert!(manifest::is_valid_id(&default_id("OI_8")));
+        assert!(space_screener_check::is_valid_id(&default_id("OI_8")));
     }
 
     #[test]
@@ -212,7 +212,7 @@ mod tests {
             .replace("{{id}}", "local.test")
             .replace("{{name}}", "test")
             .replace("{{min_terminal}}", MIN_TERMINAL);
-        let report = manifest::validate(&manifest::parse(&text).unwrap());
-        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let manifest = space_screener_check::Manifest::parse(&text);
+        assert!(manifest.is_ok(), "{manifest:?}");
     }
 }
