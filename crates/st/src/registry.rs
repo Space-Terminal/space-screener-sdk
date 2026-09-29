@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
+use reqwest::Url;
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
@@ -97,24 +98,31 @@ fn check_token(token: &str) -> Result<()> {
 }
 
 /// `https://` anywhere; plain `http://` only on this machine, so a token never crosses the
-/// network in the clear.
-fn normalize_registry(url: &str) -> Result<String> {
-    let url = url.trim().trim_end_matches('/');
-    let host = if let Some(rest) = url.strip_prefix("https://") {
-        rest
-    } else if let Some(rest) = url.strip_prefix("http://") {
-        let host = rest.split(['/', ':']).next().unwrap_or_default();
-        if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
-            bail!("`{url}`: plain http is allowed only for 127.0.0.1/localhost; use https://");
-        }
-        rest
-    } else {
-        bail!("`{url}` is not an http(s) URL");
-    };
-    if host.is_empty() || host.contains(char::is_whitespace) {
-        bail!("`{url}` has no host");
+/// network in the clear. No user info: in `http://localhost@evil.host` the host is `evil.host`.
+fn normalize_registry(raw: &str) -> Result<String> {
+    let raw = raw.trim();
+    let url = Url::parse(raw).map_err(|e| anyhow!("`{raw}` is not a URL: {e}"))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("`{raw}`: a registry URL cannot carry a user name or password");
     }
-    Ok(url.to_string())
+    let host = url
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .with_context(|| format!("`{raw}` has no host"))?;
+    match url.scheme() {
+        "https" => {}
+        "http" if matches!(host, "127.0.0.1" | "localhost" | "[::1]") => {}
+        "http" => {
+            bail!(
+                "`{raw}`: plain http is allowed only for 127.0.0.1, localhost or [::1]; use https://"
+            )
+        }
+        other => bail!("`{raw}`: the scheme must be https, not {other}"),
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        bail!("`{raw}`: a registry URL has no query or fragment");
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
 pub fn login(token: Option<String>, registry: Option<String>) -> Result<()> {
@@ -240,6 +248,14 @@ pub fn publish(
     } else {
         project::validate(dir)?
     };
+    registry::check_wasm(&built.module).map_err(|report| {
+        anyhow!(
+            "{} is too big for the catalog:\n  {}\n  the catalog compiles every version for its trial run; trim dependencies, \
+             build with opt-level = \"s\" and lto (Rust) or split the work (TypeScript)",
+            project::WASM_FILE,
+            project::problems(&report)
+        )
+    })?;
     let info = registry::check(&built.manifest_text, &built.manifest).map_err(|report| {
         anyhow!(
             "{} is not ready for the catalog:\n  {}",
@@ -394,9 +410,27 @@ mod tests {
             normalize_registry("http://127.0.0.1:8080").unwrap(),
             "http://127.0.0.1:8080"
         );
-        assert!(normalize_registry("http://store.space-terminal.com").is_err());
-        assert!(normalize_registry("ftp://x").is_err());
-        assert!(normalize_registry("https://").is_err());
+        assert_eq!(
+            normalize_registry("http://[::1]:8080/").unwrap(),
+            "http://[::1]:8080"
+        );
+        assert_eq!(
+            normalize_registry(" http://localhost:5173 ").unwrap(),
+            "http://localhost:5173"
+        );
+        for bad in [
+            "http://store.space-terminal.com",
+            "http://localhost:1@evil.host",
+            "http://localhost@evil.host/",
+            "https://user:pass@store.space-terminal.com",
+            "http://127.0.0.1.evil.host",
+            "https://store.space-terminal.com/?x=1",
+            "ftp://store.space-terminal.com",
+            "https://",
+            "store.space-terminal.com",
+        ] {
+            assert!(normalize_registry(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

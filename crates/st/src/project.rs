@@ -196,7 +196,10 @@ pub fn print_summary(built: &Built) {
 /// The catalog's extra rules (categories, description, source): a warning here, an error on
 /// `st publish`.
 pub fn print_catalog_readiness(built: &Built) {
-    match space_screener_check::registry::check(&built.manifest_text, &built.manifest) {
+    let checked = space_screener_check::registry::check_wasm(&built.module).and_then(|()| {
+        space_screener_check::registry::check(&built.manifest_text, &built.manifest)
+    });
+    match checked {
         Ok(info) => println!("catalog: ready ({})", info.categories.join(", ")),
         Err(report) => eprintln!(
             "warning: not ready for the catalog (`st publish` refuses it):\n  {}",
