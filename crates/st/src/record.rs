@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use space_screener_check::recording::Event;
 
 use crate::project;
+use crate::registry::MAX_RECORDING_BYTES;
 use crate::terminal::Terminal;
 use crate::test::RECORDINGS_DIR;
 
@@ -14,6 +15,22 @@ const POLL: Duration = Duration::from_secs(1);
 const PROGRESS_EVERY: Duration = Duration::from_secs(15);
 /// Slack past the requested duration: the terminal ends a recording on its own clock.
 const GRACE: Duration = Duration::from_secs(60);
+
+/// A recording over the registry's cap still serves `st test`, but `st publish --recording`
+/// refuses it: say so, with the seconds that would fit at the rate this one grew (10 % margin).
+fn publish_size_warning(size: usize, recorded_ms: i64) -> Option<String> {
+    if size <= MAX_RECORDING_BYTES {
+        return None;
+    }
+    let seconds = recorded_ms.max(1) as f64 / 1000.0;
+    let fit = (seconds * MAX_RECORDING_BYTES as f64 / size as f64 * 0.9).floor() as u64;
+    Some(format!(
+        "the recording is {} KiB, over the registry's {} KiB limit: for `st publish --recording` record fewer seconds (about {} s or less); `st test` can use it as is",
+        size.div_ceil(1024),
+        MAX_RECORDING_BYTES / 1024,
+        fit.max(1)
+    ))
+}
 
 /// `2026-09-29T16-40-12Z`: sortable, and valid in file names on every OS.
 fn utc_stamp(unix_s: i64) -> String {
@@ -108,7 +125,7 @@ pub fn run(
     println!(
         "wrote {} ({} KiB): {} timers, {} clicks, {} data calls",
         path.display(),
-        bytes.len() / 1024,
+        bytes.len().div_ceil(1024),
         count(|e| matches!(e, Event::Timer { .. })),
         count(|e| matches!(e, Event::Click { .. })),
         count(|e| matches!(e, Event::Call { .. })),
@@ -118,6 +135,18 @@ pub fn run(
             "warning: the recording hit the terminal's size cap and ends early; record fewer seconds"
         );
     }
+    let recorded_ms = recording
+        .events
+        .last()
+        .map_or(0, |last| last.t_ms() - recording.started_ms);
+    let recorded_ms = if recorded_ms > 0 {
+        recorded_ms
+    } else {
+        i64::try_from(seconds * 1000).unwrap_or(i64::MAX)
+    };
+    if let Some(warning) = publish_size_warning(bytes.len(), recorded_ms) {
+        eprintln!("warning: {warning}");
+    }
     println!("next: `st test` replays it headless and saves the expected rows");
     Ok(())
 }
@@ -125,6 +154,20 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warns_when_the_recording_is_too_big_to_publish() {
+        assert_eq!(publish_size_warning(MAX_RECORDING_BYTES, 45_000), None);
+        let warning = publish_size_warning(4194 * 1024, 45_000).unwrap();
+        assert!(warning.contains("4194 KiB"), "{warning}");
+        assert!(warning.contains("4096 KiB"), "{warning}");
+        assert!(warning.contains("about 39 s or less"), "{warning}");
+        assert!(
+            publish_size_warning(100 * MAX_RECORDING_BYTES, 1_000)
+                .unwrap()
+                .contains("about 1 s")
+        );
+    }
 
     #[test]
     fn stamps_are_utc_dates() {

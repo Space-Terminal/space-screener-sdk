@@ -22,7 +22,7 @@ pub const REGISTRY_ENV: &str = "ST_REGISTRY";
 pub const CONFIG_ENV: &str = "ST_CONFIG_DIR";
 const TOKEN_PREFIX: &str = "stp_";
 const CREDENTIALS_FILE: &str = "credentials.yaml";
-const MAX_RECORDING_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_RECORDING_BYTES: usize = 4 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 /// Upload plus the server's trial run, which waits for a free slot.
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(180);
