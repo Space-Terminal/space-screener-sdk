@@ -1,0 +1,36 @@
+{
+ "success": true,
+ "code": 0,
+ "data": [
+  {
+   "symbol": "BTC_USDT",
+   "displayNameEn": "BTC_USDT PERPETUAL",
+   "baseCoin": "BTC",
+   "quoteCoin": "USDT",
+   "settleCoin": "USDT",
+   "contractSize": 0.0001,
+   "state": 0,
+   "futureType": 1
+  },
+  {
+   "symbol": "ETH_USDT",
+   "displayNameEn": "ETH_USDT PERPETUAL",
+   "baseCoin": "ETH",
+   "quoteCoin": "USDT",
+   "settleCoin": "USDT",
+   "contractSize": 0.01,
+   "state": 0,
+   "futureType": 1
+  },
+  {
+   "symbol": "BTC_USDC",
+   "displayNameEn": "BTC_USDC PERPETUAL",
+   "baseCoin": "BTC",
+   "quoteCoin": "USDC",
+   "settleCoin": "USDC",
+   "contractSize": 0.0001,
+   "state": 0,
+   "futureType": 1
+  }
+ ]
+}

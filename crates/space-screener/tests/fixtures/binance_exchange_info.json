@@ -1,0 +1,60 @@
+{
+ "timezone": "UTC",
+ "serverTime": 1790587200724,
+ "symbols": [
+  {
+   "symbol": "BTCUSDT",
+   "pair": "BTCUSDT",
+   "contractType": "PERPETUAL",
+   "status": "TRADING",
+   "baseAsset": "BTC",
+   "quoteAsset": "USDT",
+   "marginAsset": "USDT"
+  },
+  {
+   "symbol": "ETHUSDT",
+   "pair": "ETHUSDT",
+   "contractType": "PERPETUAL",
+   "status": "TRADING",
+   "baseAsset": "ETH",
+   "quoteAsset": "USDT",
+   "marginAsset": "USDT"
+  },
+  {
+   "symbol": "XAUUSDT",
+   "pair": "XAUUSDT",
+   "contractType": "TRADIFI_PERPETUAL",
+   "status": "TRADING",
+   "baseAsset": "XAU",
+   "quoteAsset": "USDT",
+   "marginAsset": "USDT"
+  },
+  {
+   "symbol": "BTCUSDC",
+   "pair": "BTCUSDC",
+   "contractType": "PERPETUAL",
+   "status": "TRADING",
+   "baseAsset": "BTC",
+   "quoteAsset": "USDC",
+   "marginAsset": "USDC"
+  },
+  {
+   "symbol": "BTCUSDT_261225",
+   "pair": "BTCUSDT",
+   "contractType": "CURRENT_QUARTER",
+   "status": "TRADING",
+   "baseAsset": "BTC",
+   "quoteAsset": "USDT",
+   "marginAsset": "USDT"
+  },
+  {
+   "symbol": "OMGUSDT",
+   "pair": "OMGUSDT",
+   "contractType": "PERPETUAL",
+   "status": "SETTLING",
+   "baseAsset": "OMG",
+   "quoteAsset": "USDT",
+   "marginAsset": "USDT"
+  }
+ ]
+}

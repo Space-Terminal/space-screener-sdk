@@ -1,0 +1,47 @@
+use space_screener::prelude::*;
+
+/// Starter screener: biggest 24h movers on every connected futures exchange.
+#[derive(Default)]
+struct {{type_name}};
+
+impl Screener for {{type_name}} {
+    fn on_timer(&mut self, _now_ms: i64) -> ScreenerResult {
+        let params = params();
+        let min_volume = params.f64_or("min_volume", 1_000_000.0);
+        let limit = params.i64_or("limit", 50).max(1) as usize;
+
+        let mut movers = Vec::new();
+        for ex in exchanges()? {
+            if !ex.connected || ex.market != Market::Futures {
+                continue;
+            }
+            let snapshot = match tickers(&ex.exchange, ex.market) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    warn!("{}: {e}", ex.exchange);
+                    continue;
+                }
+            };
+            for t in snapshot.tickers {
+                if t.volume_quote < min_volume {
+                    continue;
+                }
+                let row = Row::new(format!("{}:{}", ex.exchange, t.symbol))
+                    .market_ref(&MarketRef::new(&ex.exchange, ex.market, &t.symbol))
+                    .cell("symbol", t.symbol.as_str())
+                    .cell("exchange", ex.exchange.as_str())
+                    .cell("change", Cell::signed(t.change_pct))
+                    .cell("volume", t.volume_quote)
+                    .cell("last", t.last);
+                movers.push((t.change_pct.abs(), row));
+            }
+        }
+        movers.sort_by(|a, b| b.0.total_cmp(&a.0));
+        movers.truncate(limit);
+        set_status(StatusTone::Ok, format!("{} rows", movers.len()))?;
+        replace_rows(movers.into_iter().map(|(_, row)| row))?;
+        Ok(())
+    }
+}
+
+export_screener!({{type_name}});

@@ -1,0 +1,32 @@
+abi: 1
+id: space.oi-8-exchanges
+version: 0.1.0
+name: {ru: "Открытый интерес: 8 бирж", en: "Open interest: 8 exchanges"}
+description:
+  ru: "OI бессрочных USDT-фьючерсов в долларах (одна сторона) и его изменение за 5 и 15 минут"
+  en: "One-side open interest of USDT perpetuals in USD and its 5 and 15 minute change"
+lang: rust
+min_terminal: 0.104.70
+http:
+  - fapi.binance.com
+  - api.bybit.com
+  - app.okx.com
+  - api.bitget.com
+  - api.gateio.ws
+  - contract.mexc.com
+  - api-futures.kucoin.com
+  - api.hyperliquid.xyz
+timer_ms: 60000
+columns:
+  - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
+  - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
+  - {key: oi, type: usd, title: {ru: "OI, $", en: "OI, $"}, sort: desc}
+  - {key: chg5, type: percent, title: {ru: "OI 5м", en: "OI 5m"}}
+  - {key: chg15, type: percent, title: {ru: "OI 15м", en: "OI 15m"}}
+  - {key: price, type: price, title: {ru: "Цена", en: "Price"}}
+params:
+  - {key: min_oi, type: number, title: {ru: "Мин. OI, $", en: "Min OI, $"}, default: 5000000, min: 0}
+  - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 500, min: 1, max: 5000}
+  - {key: alert_pct, type: number, title: {ru: "Алерт при |OI 5м| ≥, %", en: "Alert when |OI 5m| ≥, %"}, default: 0, min: 0, max: 100}
+  - {key: binance_top_n, type: integer, title: {ru: "Binance: топ по объёму (600 — все)", en: "Binance: top by volume (600 = all)"}, default: 200, min: 1, max: 600}
+limits: {cpu_ms_per_call: 1000}
