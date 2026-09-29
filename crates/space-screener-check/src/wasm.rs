@@ -147,6 +147,8 @@ pub struct WasmInfo {
     pub imports: Vec<(String, String)>,
     /// Function exports only.
     pub exports: Vec<String>,
+    /// Bytes of the code section (function bodies): compile time and memory scale with it.
+    pub code_bytes: usize,
 }
 
 pub fn is_host_function(name: &str) -> bool {
@@ -306,6 +308,7 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
                     }
                 }
             }
+            Payload::CodeSectionStart { range, .. } => info.code_bytes = range.len(),
             Payload::CodeSectionEntry(body) => {
                 let mut operators = match body.get_operators_reader() {
                     Ok(operators) => operators,

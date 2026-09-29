@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use crate::manifest::{Manifest, normalize_host};
 use crate::report::{Code, Report};
+use crate::wasm::WasmInfo;
 
 pub const CATEGORIES: &[&str] = &[
     "volume",
@@ -19,6 +20,10 @@ pub const CATEGORIES: &[&str] = &[
 pub const MAX_CATEGORIES: usize = 3;
 pub const MAX_DESCRIPTION: usize = 2000;
 pub const MAX_SOURCE_URL: usize = 512;
+/// Code section cap for the catalog. Compiling wasm takes memory in proportion to its code
+/// (about 80× on the registry's trial run), so the catalog accepts less code than the
+/// terminal's 10 MiB module limit.
+pub const MAX_CODE_BYTES: usize = 4 * 1024 * 1024;
 
 /// Catalog metadata of a manifest that passed [`check`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +138,24 @@ pub fn check(yaml: &str, manifest: &Manifest) -> Result<RegistryInfo, Report> {
     }
 }
 
+/// Registry rules for a module that already passed [`crate::inspect`].
+pub fn check_wasm(info: &WasmInfo) -> Result<(), Report> {
+    if info.code_bytes <= MAX_CODE_BYTES {
+        return Ok(());
+    }
+    let mut r = Report::default();
+    r.error(
+        Code::TooLarge,
+        "code",
+        format!(
+            "code section is {:.1} MiB, the catalog accepts up to {} MiB",
+            info.code_bytes as f64 / (1024.0 * 1024.0),
+            MAX_CODE_BYTES / (1024 * 1024)
+        ),
+    );
+    Err(r)
+}
+
 /// `https://host[:port][/path][?query][#fragment]`: no user info, the host by the same rules as
 /// the manifest's `http` hosts (a public name with a dot, not an IP address or localhost).
 fn is_https_url(url: &str) -> bool {
@@ -207,6 +230,28 @@ mod tests {
         let missing = run("").unwrap_err().to_string();
         assert!(missing.contains("categories are required"), "{missing}");
         assert!(missing.contains("needs a description"), "{missing}");
+    }
+
+    #[test]
+    fn the_catalog_caps_the_code_section() {
+        let info = |code_bytes| WasmInfo {
+            code_bytes,
+            ..WasmInfo::default()
+        };
+        assert!(check_wasm(&info(MAX_CODE_BYTES)).is_ok());
+        let report = check_wasm(&info(MAX_CODE_BYTES + 512 * 1024)).unwrap_err();
+        assert_eq!(report.errors[0].code, Code::TooLarge);
+        assert_eq!(
+            report.errors[0].message,
+            "code section is 4.5 MiB, the catalog accepts up to 4 MiB"
+        );
+        let wasm = wat::parse_str(
+            r#"(module (func (export "init") (result i32) i32.const 0)
+                       (func (export "on_timer") (result i32) i32.const 0))"#,
+        )
+        .unwrap();
+        let code = crate::inspect(&wasm).unwrap().code_bytes;
+        assert!((1..wasm.len()).contains(&code), "{code}");
     }
 
     #[test]
