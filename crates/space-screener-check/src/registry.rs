@@ -3,7 +3,7 @@
 
 use serde::Deserialize;
 
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, normalize_host};
 use crate::report::{Code, Report};
 
 pub const CATEGORIES: &[&str] = &[
@@ -77,11 +77,11 @@ pub fn check(yaml: &str, manifest: &Manifest) -> Result<RegistryInfo, Report> {
                     ),
                 }
             }
-            if items.is_empty() || items.len() > MAX_CATEGORIES {
+            if categories.is_empty() || categories.len() > MAX_CATEGORIES {
                 r.error(
                     Code::InvalidManifest,
                     "categories",
-                    format!("list 1..={MAX_CATEGORIES} categories"),
+                    format!("list 1..={MAX_CATEGORIES} different categories"),
                 );
             }
         }
@@ -133,18 +133,27 @@ pub fn check(yaml: &str, manifest: &Manifest) -> Result<RegistryInfo, Report> {
     }
 }
 
+/// `https://host[:port][/path][?query][#fragment]`: no user info, the host by the same rules as
+/// the manifest's `http` hosts (a public name with a dot, not an IP address or localhost).
 fn is_https_url(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else {
         return false;
     };
-    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    let port_ok = port.is_none_or(|port| {
+        !port.is_empty()
+            && port.bytes().all(|b| b.is_ascii_digit())
+            && port.parse::<u16>().is_ok_and(|port| port > 0)
+    });
     url.len() <= MAX_SOURCE_URL
         && !url.chars().any(|c| c.is_whitespace() || c.is_control())
-        && host.contains('.')
-        && !host.contains('@')
-        && host
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
+        && port_ok
+        && !host.contains(['@', '%'])
+        && normalize_host(host).is_some_and(|normalized| normalized == host.to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -183,7 +192,7 @@ mod tests {
     fn reports_every_catalog_problem() {
         let long = "x".repeat(MAX_DESCRIPTION + 1);
         let report = run(&format!(
-            "description: {{ru: \"{long}\"}}\ncategories: [volume, cats, funding, spread]\nsource: http://example.com\n"
+            "description: {{ru: \"{long}\"}}\ncategories: [volume, cats, funding, spread, movers]\nsource: http://example.com\n"
         ))
         .unwrap_err()
         .to_string();
@@ -201,16 +210,41 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_categories_count_once() {
+        let info =
+            run("description: {en: x}\ncategories: [volume, volume, volume, volume]\n").unwrap();
+        assert_eq!(info.categories, ["volume"]);
+        assert!(run("description: {en: x}\ncategories: []\n").is_err());
+    }
+
+    #[test]
     fn source_must_be_a_plain_https_link() {
         for bad in [
             "https://",
+            "https://.",
             "https://user@evil.com/x",
+            "https://a.b:x@c/",
+            "https://evil.com%2F@good.com",
             "https://exa mple.com",
             "javascript:alert(1)",
             "https://localhost/x",
+            "https://127.0.0.1/x",
+            "https://127.0.0.1:99999/x",
+            "https://github.com:0/x",
+            "https://github.com:99999/x",
+            "https://github.com:/x",
+            "https://[::1]/x",
+            "https://api.123/x",
+            "http://github.com/x",
         ] {
             assert!(!is_https_url(bad), "{bad}");
         }
-        assert!(is_https_url("https://gitlab.com/a/b?tab=readme#top"));
+        for good in [
+            "https://gitlab.com/a/b?tab=readme#top",
+            "https://github.com:443/ivan/oi",
+            "https://git.example.io",
+        ] {
+            assert!(is_https_url(good), "{good}");
+        }
     }
 }
