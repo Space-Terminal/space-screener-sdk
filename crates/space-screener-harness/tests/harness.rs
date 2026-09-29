@@ -238,3 +238,73 @@ fn trial_with_a_recording_uses_it() {
     assert_eq!(report.verdict, Verdict::Ok, "{report:?}");
     assert_eq!(report.total_rows, 1);
 }
+
+#[test]
+fn a_call_running_past_the_deadline_is_cancelled() {
+    let wasm = wat::parse_str(
+        r#"(module
+  (func (export "init") (result i32) i32.const 0)
+  (func (export "on_timer") (result i32) (loop $spin (br $spin)) (i32.const 0)))"#,
+    )
+    .unwrap();
+    let mut harness = Harness::new(&manifest(), &wasm, Box::new(Offline)).unwrap();
+    harness
+        .init(&BTreeMap::new(), "0.104.71", Default::default(), 0)
+        .unwrap();
+    let started = std::time::Instant::now();
+    harness.set_deadline(Some(started + std::time::Duration::from_millis(300)));
+    assert_eq!(harness.timer(1000).unwrap(), CallOutcome::Deadline);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    harness.restart().unwrap();
+    assert_eq!(
+        harness.timer(2000).unwrap(),
+        CallOutcome::Deadline,
+        "no call starts after it"
+    );
+}
+
+#[test]
+fn trial_report_is_capped() {
+    let msg = "x".repeat(4000);
+    let payload = format!(r#"{{"level":"info","msg":"{msg}"}}"#);
+    let wat = format!(
+        r#"(module
+  (import "extism:host/env" "alloc" (func $alloc (param i64) (result i64)))
+  (import "extism:host/env" "store_u8" (func $store_u8 (param i64 i32)))
+  (import "extism:host/user" "log" (func $log (param i64) (result i64)))
+  (memory 1)
+  (data (i32.const 0) "{escaped}")
+  (func (export "init") (result i32)
+    (local $off i64) (local $i i32) (local $n i32)
+    (local.set $off (call $alloc (i64.const {len})))
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (i32.const {len})))
+      (call $store_u8 (i64.add (local.get $off) (i64.extend_i32_u (local.get $i)))
+        (i32.load8_u (local.get $i)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (block $end (loop $again
+      (br_if $end (i32.ge_u (local.get $n) (i32.const 300)))
+      (drop (call $log (local.get $off)))
+      (local.set $n (i32.add (local.get $n) (i32.const 1)))
+      (br $again)))
+    (i32.const 0))
+  (func (export "on_timer") (result i32) (i32.const 0)))"#,
+        escaped = payload.replace('"', "\\\""),
+        len = payload.len(),
+    );
+    let wasm = wat::parse_str(wat).unwrap();
+    let report = trial(&manifest(), &wasm, None);
+    let size = serde_json::to_vec(&report).unwrap().len();
+    assert!(size <= space_screener_harness::MAX_REPORT_BYTES, "{size}");
+    assert!(
+        report.issues.iter().any(|issue| issue.contains("trimmed")),
+        "{:?}",
+        report.issues
+    );
+    assert!(!report.logs.is_empty());
+}

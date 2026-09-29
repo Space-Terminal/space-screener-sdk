@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use extism::{CompiledPlugin, Plugin, PluginBuilder, Wasm};
 use serde_json::{Value, json};
@@ -55,6 +57,8 @@ pub enum CallOutcome {
     TimedOut {
         limit: Duration,
     },
+    /// Stopped at the run's wall-clock deadline ([`Harness::set_deadline`]).
+    Deadline,
     /// The export is missing (`on_click` is optional).
     NoExport,
 }
@@ -64,7 +68,7 @@ impl CallOutcome {
     pub fn needs_restart(&self) -> bool {
         matches!(
             self,
-            Self::Trapped { .. } | Self::Cut { .. } | Self::TimedOut { .. }
+            Self::Trapped { .. } | Self::Cut { .. } | Self::TimedOut { .. } | Self::Deadline
         )
     }
 
@@ -89,6 +93,7 @@ impl CallOutcome {
             Self::TimedOut { limit } => {
                 format!("ran {} s without returning", limit.as_secs())
             }
+            Self::Deadline => "was stopped at the run's wall-clock deadline".to_string(),
             Self::NoExport => "the export is missing".to_string(),
         }
     }
@@ -106,6 +111,7 @@ pub struct Harness {
     shared: Shared,
     manifest: Arc<Manifest>,
     info: WasmInfo,
+    deadline: Option<Instant>,
 }
 
 impl Harness {
@@ -138,6 +144,7 @@ impl Harness {
             shared,
             manifest,
             info,
+            deadline: None,
         })
     }
 
@@ -147,6 +154,12 @@ impl Harness {
 
     pub fn wasm_info(&self) -> &WasmInfo {
         &self.info
+    }
+
+    /// A wall-clock deadline for every later call: a call still running at it is cancelled,
+    /// and calls after it do not start ([`CallOutcome::Deadline`]).
+    pub fn set_deadline(&mut self, deadline: Option<Instant>) {
+        self.deadline = deadline;
     }
 
     /// A fresh instance after a trap; rows, kv, logs and stats are kept, as in the terminal.
@@ -239,11 +252,37 @@ impl Harness {
             state.now_ms = now_ms;
             state.meter.begin(budget);
         })?;
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.with_state(|state| {
+                state.host_log(
+                    "warn",
+                    format!("{name} {}", CallOutcome::Deadline.describe()),
+                );
+            })?;
+            return Ok(CallOutcome::Deadline);
+        }
+        let watchdog = self.deadline.map(|deadline| {
+            let cancel = self.plugin.cancel_handle();
+            let (done, wait) = mpsc::channel::<()>();
+            let handle = thread::spawn(move || {
+                let left = deadline.saturating_duration_since(Instant::now());
+                matches!(wait.recv_timeout(left), Err(RecvTimeoutError::Timeout))
+                    && cancel.cancel().is_ok()
+            });
+            (done, handle)
+        });
         let result = self
             .plugin
             .call_get_error_code::<&[u8], &[u8]>(name, &bytes)
             .map(|_| ())
             .map_err(|(error, code)| (format!("{error:#}"), code));
+        let cancelled = watchdog.is_some_and(|(done, handle)| {
+            drop(done);
+            handle.join().unwrap_or(false)
+        });
         self.with_state(|state| {
             let cpu = state.meter.spent();
             state.stats.cpu_ms_max = state
@@ -254,6 +293,7 @@ impl Harness {
                 Ok(()) if cpu > budget => CallOutcome::OverBudget { cpu, budget },
                 Ok(()) => CallOutcome::Done { cpu },
                 Err(_) if state.meter.cut => CallOutcome::Cut { budget },
+                Err(_) if cancelled => CallOutcome::Deadline,
                 Err((message, code)) => match (code, message.as_str()) {
                     (TRAP_CODE, "timeout") => CallOutcome::TimedOut {
                         limit: runaway_limit(self.manifest.limits.cpu_per_call.max(INIT_BUDGET)),
@@ -267,6 +307,9 @@ impl Harness {
                 CallOutcome::Failed { message } => {
                     state.stats.failures += 1;
                     state.host_log("error", format!("{name} failed: {message}"));
+                }
+                CallOutcome::Deadline => {
+                    state.host_log("warn", format!("{name} {}", outcome.describe()));
                 }
                 CallOutcome::Trapped { .. } | CallOutcome::TimedOut { .. } => {
                     state.stats.traps += 1;

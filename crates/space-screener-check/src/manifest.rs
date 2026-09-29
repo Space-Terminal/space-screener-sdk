@@ -492,6 +492,11 @@ fn check(yaml: &str, terminal: Option<&semver::Version>) -> (Option<Manifest>, R
     let mut http = Vec::with_capacity(raw.http.len());
     for (i, host) in raw.http.iter().enumerate() {
         match normalize_host(host) {
+            Some(host) if http.contains(&host) => r.error(
+                Code::InvalidManifest,
+                format!("http[{i}]"),
+                format!("`{host}` is declared twice"),
+            ),
             Some(host) => http.push(host),
             None => r.error(
                 Code::InvalidManifest,
@@ -1020,6 +1025,17 @@ limits: {memory_mb: 128}
             Code::InvalidManifest,
             "document order without a terminal"
         );
+    }
+
+    #[test]
+    fn http_hosts_are_unique_after_normalization() {
+        let yaml = host_manifest("").replace(
+            "http: [fapi.binance.com]",
+            "http: [fapi.binance.com, \" FAPI.Binance.com \"]",
+        );
+        let report = Manifest::parse(&yaml).unwrap_err();
+        assert_eq!(report.errors[0].path, "http[1]");
+        assert!(report.errors[0].message.contains("declared twice"));
     }
 
     #[test]
