@@ -3,6 +3,7 @@ mod init;
 mod manifest;
 mod project;
 mod record;
+mod registry;
 mod terminal;
 mod test;
 
@@ -86,6 +87,29 @@ enum Command {
         #[arg(long)]
         no_open: bool,
     },
+    /// Save a publish token (made on the author page of the store) for `st publish`
+    Login {
+        /// The token; read from stdin when omitted
+        #[arg(long)]
+        token: Option<String>,
+        /// Registry URL (default: ST_REGISTRY, then https://store.space-terminal.com)
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Build, check and upload the screener to the catalog; a moderator reviews each version
+    Publish {
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// A recording from `st record` for the trial run and the moderator (≤ 4 MiB)
+        #[arg(long)]
+        recording: Option<PathBuf>,
+        /// Publish the screener.wasm already built instead of building first
+        #[arg(long)]
+        no_build: bool,
+        /// Registry URL (default: ST_REGISTRY, the one saved by `st login`, the Space Market store)
+        #[arg(long)]
+        registry: Option<String>,
+    },
     /// Print the screener log from the terminal
     Logs {
         #[arg(long, default_value = ".")]
@@ -156,6 +180,13 @@ fn run(cli: Cli) -> Result<()> {
             out,
         } => record::run(&dir, id, seconds, out, cli.port),
         Command::Dev { dir, no_open } => dev::run(&dir, cli.port, !no_open),
+        Command::Login { token, registry } => registry::login(token, registry),
+        Command::Publish {
+            dir,
+            recording,
+            no_build,
+            registry,
+        } => registry::publish(&dir, recording, !no_build, registry),
         Command::Logs {
             dir,
             id,

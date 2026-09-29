@@ -18,7 +18,7 @@ pub struct Built {
     pub module: WasmInfo,
 }
 
-fn problems(report: &Report) -> String {
+pub fn problems(report: &Report) -> String {
     report
         .errors
         .iter()
