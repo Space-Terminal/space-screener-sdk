@@ -52,9 +52,21 @@ links it:
 - At most 20 tables holding at most 50 000 elements in total — tables live outside `limits.memory_mb`.
   A table without a declared maximum counts with its initial size and must never be grown with
   `table.grow`.
-- `screener.wasm` is at most 10 MiB. For the Space Market catalog its code section is at most 4 MiB
-  (`too_large`): the registry compiles every version for its trial run, and compiling takes memory in
-  proportion to the code. A Rust screener is typically 150–300 KiB of code, a TypeScript one about 1 MiB.
+- Size and shape of the code — compiling takes memory in proportion to the function being compiled:
+
+| Limit | Value | Error |
+|---|---|---|
+| `screener.wasm` | ≤ 10 MiB | `too_large` |
+| Code section, Space Market catalog only | ≤ 4 MiB (the registry compiles every version for its trial run) | `too_large` |
+| Functions (defined in the module) | ≤ 10 000 | `invalid_wasm`, path `functions` |
+| Body of one function | ≤ 256 KiB | `invalid_wasm`, path `function N` |
+| Nesting of `block` / `loop` / `if` / `try_table` | ≤ 2 000 deep | `invalid_wasm`, path `function N` |
+| Targets of one `br_table` | ≤ 10 000 | `invalid_wasm`, path `function N` |
+
+  Real screeners stay far below: a Rust one is 150–300 KiB of code in total, the TypeScript engine
+  (QuickJS) about 1 MiB in 1 566 functions, its largest body 50 KiB. A function over the limits is
+  usually generated code — a huge `match` or table built inline, or an unrolled chain; move the data
+  into a `static` or split the function.
 
 ### Refused exports
 

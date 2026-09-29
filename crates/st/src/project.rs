@@ -39,9 +39,29 @@ pub fn check_manifest(dir: &Path) -> Result<(String, Manifest)> {
     }
 }
 
+/// Shape limits of `inspect` (functions, body size, nesting, br_table) name the function.
+fn shape_hint(report: &Report) -> &'static str {
+    if report
+        .errors
+        .iter()
+        .any(|issue| issue.path == "functions" || issue.path.starts_with("function "))
+    {
+        "\nhint: the terminal caps functions at 256 KiB of code each (10 000 functions, nesting 2 000, \
+         br_table 10 000 targets); an oversized one is usually a giant match or a table built inline — \
+         move the data into a static or split the function"
+    } else {
+        ""
+    }
+}
+
 fn check_module(wasm: &[u8]) -> Result<WasmInfo> {
-    space_screener_check::inspect(wasm)
-        .map_err(|report| anyhow!("{WASM_FILE}:\n  {}", problems(&report)))
+    space_screener_check::inspect(wasm).map_err(|report| {
+        anyhow!(
+            "{WASM_FILE}:\n  {}{}",
+            problems(&report),
+            shape_hint(&report)
+        )
+    })
 }
 
 fn ensure_target(dir: &Path) -> Result<()> {
@@ -213,4 +233,28 @@ pub fn screener_id(dir: &Path, explicit: Option<String>) -> Result<String> {
         return Ok(id);
     }
     manifest::read_id(dir).context("pass --id or run inside a screener project")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use space_screener_check::{Code, Issue};
+
+    fn report(path: &str) -> Report {
+        Report {
+            errors: vec![Issue {
+                code: Code::InvalidWasm,
+                path: path.to_string(),
+                message: "x".to_string(),
+            }],
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn shape_errors_get_a_hint() {
+        assert!(shape_hint(&report("function 12")).contains("256 KiB"));
+        assert!(shape_hint(&report("functions")).contains("split the function"));
+        assert_eq!(shape_hint(&report("import wasi::fd_write")), "");
+    }
 }

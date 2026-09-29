@@ -214,6 +214,7 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | status 301/302 with an empty body | redirects are not followed; call the final URL directly |
 | `bad_request` on http | only `https://`, no `user:pass@` in the URL, `timeout_ms` 1000..=10000 |
 | `forbidden_export` / start section | build a `cdylib` for wasm32-unknown-unknown with `st build`; WASI/C runtimes (`_start`, `_initialize`) are refused |
+| `invalid_wasm: function N: … KiB of code, the limit is 256 KiB per function` (or nesting / br_table) | one enormous function — usually a giant `match` or a table built inline: move the data into a `static`, split the function |
 | `limit` status / cpu overrun | host work for your calls counts too: parse only the fields you need (`#[derive(Deserialize)]` structs, not `serde_json::Value`), emit fewer/smaller rows, raise `limits.cpu_ms_per_call`, cache slow-changing metadata |
 | slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints or rotate groups of exchanges (exchange rate limits are shared with the user's trading IP; `fapi.binance.com` is capped at 5 requests/s) |
 | history (5/15 min changes) resets | every `st dev` reinstall and every crash restarts the plugin; windows fill again from scratch |
