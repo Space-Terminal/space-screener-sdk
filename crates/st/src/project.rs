@@ -4,9 +4,9 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use space_screener_check::wasm::ENTRY_POINTS;
-use space_screener_check::{Lang, Manifest, Report, WasmInfo};
+use space_screener_check::{Lang, Manifest, PluginLang, Report, WasmInfo};
 
-use crate::manifest;
+use crate::{manifest, ts};
 
 pub const WASM_TARGET: &str = "wasm32-unknown-unknown";
 pub const WASM_FILE: &str = space_screener_check::wasm::FILE;
@@ -127,8 +127,7 @@ fn artifact_path(dir: &Path) -> Result<PathBuf> {
         .join(format!("{}.wasm", lib.name.replace('-', "_"))))
 }
 
-pub fn build(dir: &Path) -> Result<Built> {
-    let (manifest_text, manifest) = check_manifest(dir)?;
+fn build_rust(dir: &Path) -> Result<Vec<u8>> {
     ensure_target(dir)?;
     let status = Command::new("cargo")
         .args(["build", "--release", "--target", WASM_TARGET])
@@ -139,8 +138,15 @@ pub fn build(dir: &Path) -> Result<Built> {
         bail!("cargo build failed");
     }
     let artifact = artifact_path(dir)?;
-    let wasm =
-        std::fs::read(&artifact).with_context(|| format!("cannot read {}", artifact.display()))?;
+    std::fs::read(&artifact).with_context(|| format!("cannot read {}", artifact.display()))
+}
+
+pub fn build(dir: &Path) -> Result<Built> {
+    let (manifest_text, manifest) = check_manifest(dir)?;
+    let wasm = match manifest.lang {
+        PluginLang::Rust => build_rust(dir)?,
+        PluginLang::Ts => ts::build(dir)?,
+    };
     std::fs::write(dir.join(WASM_FILE), &wasm).context("cannot write screener.wasm")?;
     let module = check_module(&wasm)?;
     Ok(Built {

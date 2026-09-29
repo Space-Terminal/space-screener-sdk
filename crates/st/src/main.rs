@@ -6,6 +6,8 @@ mod record;
 mod registry;
 mod terminal;
 mod test;
+mod toolchain;
+mod ts;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,7 +32,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a screener project (Cargo.toml, manifest.yaml, src/lib.rs)
+    /// Create a screener project (Rust: Cargo.toml + src/lib.rs; TypeScript: package.json + src/index.ts)
     Init {
         /// Project folder; created if missing
         #[arg(default_value = ".")]
@@ -41,6 +43,9 @@ enum Command {
         /// Path to the space-screener crate (default: the local SDK checkout st was built from, else git)
         #[arg(long)]
         sdk_path: Option<PathBuf>,
+        /// Language of the screener: rust or ts (TypeScript, built with extism-js)
+        #[arg(long, default_value = "rust")]
+        lang: init::InitLang,
     },
     /// Build screener.wasm and check it against the terminal's rules
     Build {
@@ -154,7 +159,12 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Init { path, id, sdk_path } => init::init(&path, id, sdk_path),
+        Command::Init {
+            path,
+            id,
+            sdk_path,
+            lang,
+        } => init::init(&path, id, sdk_path, lang),
         Command::Build { dir } => {
             let built = project::build(&dir)?;
             project::print_summary(&built);

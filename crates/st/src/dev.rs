@@ -73,15 +73,20 @@ impl Session<'_> {
 // The project folder is watched non-recursively (editors that save by rename break
 // file-level watches), so its events are filtered down to the sources that matter.
 fn relevant(event: &Event, dir: &Path) -> bool {
-    let src = dir.join("src");
-    let files = [dir.join("manifest.yaml"), dir.join("Cargo.toml")];
+    let sources = [dir.join("src"), dir.join("pdk")];
+    let files = [
+        dir.join("manifest.yaml"),
+        dir.join("Cargo.toml"),
+        dir.join("package.json"),
+        dir.join("tsconfig.json"),
+    ];
     matches!(
         event.kind,
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
     ) && event
         .paths
         .iter()
-        .any(|p| p.starts_with(&src) || files.contains(p))
+        .any(|p| sources.iter().any(|s| p.starts_with(s)) || files.contains(p))
 }
 
 pub fn run(dir: &Path, cli_port: Option<u16>, open_pane: bool) -> Result<()> {
@@ -99,6 +104,12 @@ pub fn run(dir: &Path, cli_port: Option<u16>, open_pane: bool) -> Result<()> {
     watcher
         .watch(&dir, RecursiveMode::NonRecursive)
         .context("cannot watch the project folder")?;
+    let pdk = dir.join("pdk");
+    if pdk.is_dir() {
+        watcher
+            .watch(&pdk, RecursiveMode::Recursive)
+            .context("cannot watch pdk/")?;
+    }
 
     let mut session = Session {
         dir: &dir,

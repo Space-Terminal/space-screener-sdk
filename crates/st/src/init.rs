@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use clap::ValueEnum;
 
-use crate::manifest;
+use crate::{manifest, ts};
 
 /// Oldest terminal with the screener runtime (ABI v1).
 pub const MIN_TERMINAL: &str = "0.104.70";
@@ -13,6 +14,17 @@ const CARGO_TOML: &str = include_str!("../templates/Cargo.toml.tmpl");
 const MANIFEST: &str = include_str!("../templates/manifest.yaml.tmpl");
 const LIB_RS: &str = include_str!("../templates/lib.rs.tmpl");
 const GITIGNORE: &str = include_str!("../templates/gitignore.tmpl");
+const TS_PACKAGE: &str = include_str!("../templates/ts/package.json.tmpl");
+const TS_CONFIG: &str = include_str!("../templates/ts/tsconfig.json.tmpl");
+const TS_MANIFEST: &str = include_str!("../templates/ts/manifest.yaml.tmpl");
+const TS_INDEX: &str = include_str!("../templates/ts/index.ts.tmpl");
+const TS_GITIGNORE: &str = include_str!("../templates/ts/gitignore.tmpl");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InitLang {
+    Rust,
+    Ts,
+}
 
 fn crate_name(name: &str) -> String {
     let snake: String = name
@@ -109,8 +121,36 @@ fn select_sdk_dependency(
     })
 }
 
-pub fn init(dir: &Path, id: Option<String>, sdk_path: Option<PathBuf>) -> Result<()> {
-    for existing in ["Cargo.toml", manifest::FILE, "src/lib.rs"] {
+fn package_name(name: &str) -> String {
+    let kebab: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let kebab = kebab.trim_matches('-').to_string();
+    if kebab.is_empty() {
+        "screener".into()
+    } else {
+        kebab
+    }
+}
+
+pub fn init(
+    dir: &Path,
+    id: Option<String>,
+    sdk_path: Option<PathBuf>,
+    lang: InitLang,
+) -> Result<()> {
+    let entry = match lang {
+        InitLang::Rust => "src/lib.rs",
+        InitLang::Ts => ts::SOURCE,
+    };
+    for existing in ["Cargo.toml", "package.json", manifest::FILE, entry] {
         if dir.join(existing).exists() {
             bail!(
                 "{} already has {existing}; st init only creates new projects",
@@ -136,23 +176,45 @@ pub fn init(dir: &Path, id: Option<String>, sdk_path: Option<PathBuf>) -> Result
     let render = |template: &str| {
         template
             .replace("{{crate}}", &crate_name(&name))
+            .replace("{{package}}", &package_name(&name))
             .replace("{{type_name}}", &type_name(&name))
             .replace("{{name}}", &name)
             .replace("{{id}}", &id)
             .replace("{{min_terminal}}", MIN_TERMINAL)
     };
-    let cargo = render(CARGO_TOML).replace("{{sdk_dep}}", &sdk_dependency(sdk_path)?);
-    let files = [
-        ("Cargo.toml", cargo),
-        (manifest::FILE, render(MANIFEST)),
-        ("src/lib.rs", render(LIB_RS)),
-        (".gitignore", GITIGNORE.to_string()),
-    ];
+    let files = match lang {
+        InitLang::Rust => vec![
+            (
+                "Cargo.toml",
+                render(CARGO_TOML).replace("{{sdk_dep}}", &sdk_dependency(sdk_path)?),
+            ),
+            (manifest::FILE, render(MANIFEST)),
+            ("src/lib.rs", render(LIB_RS)),
+            (".gitignore", GITIGNORE.to_string()),
+        ],
+        InitLang::Ts => vec![
+            ("package.json", render(TS_PACKAGE)),
+            ("tsconfig.json", TS_CONFIG.to_string()),
+            (manifest::FILE, render(TS_MANIFEST)),
+            (ts::SOURCE, TS_INDEX.to_string()),
+            (".gitignore", TS_GITIGNORE.to_string()),
+        ],
+    };
     for (file, content) in files {
         std::fs::write(dir.join(file), content).with_context(|| format!("cannot write {file}"))?;
     }
+    if lang == InitLang::Ts {
+        ts::write_pdk(dir)?;
+    }
     println!("created screener `{id}` in {}", dir.display());
-    println!("next: edit src/lib.rs and manifest.yaml, then `st build` and `st dev`");
+    match lang {
+        InitLang::Rust => {
+            println!("next: edit src/lib.rs and manifest.yaml, then `st build` and `st dev`")
+        }
+        InitLang::Ts => println!(
+            "next: edit src/index.ts and manifest.yaml, then `st build` (runs npm install and fetches extism-js/binaryen once) and `st dev`"
+        ),
+    }
     Ok(())
 }
 
@@ -207,12 +269,16 @@ mod tests {
     }
 
     #[test]
-    fn template_manifest_is_valid() {
-        let text = MANIFEST
-            .replace("{{id}}", "local.test")
-            .replace("{{name}}", "test")
-            .replace("{{min_terminal}}", MIN_TERMINAL);
-        let manifest = space_screener_check::Manifest::parse(&text);
-        assert!(manifest.is_ok(), "{manifest:?}");
+    fn template_manifests_are_valid() {
+        for template in [MANIFEST, TS_MANIFEST] {
+            let text = template
+                .replace("{{id}}", "local.test")
+                .replace("{{name}}", "test")
+                .replace("{{min_terminal}}", MIN_TERMINAL);
+            let manifest = space_screener_check::Manifest::parse(&text);
+            assert!(manifest.is_ok(), "{manifest:?}");
+        }
+        assert_eq!(package_name("My Screener!"), "my-screener");
+        assert_eq!(package_name("__"), "screener");
     }
 }
