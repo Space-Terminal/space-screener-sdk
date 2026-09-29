@@ -285,6 +285,11 @@ fn compile(dir: &Path, exports: &[String], tools: &Tools) -> Result<Vec<u8>> {
 
 /// Builds the module of a `lang: ts` project; the caller checks it like any other.
 pub fn build(dir: &Path) -> Result<Vec<u8>> {
+    // Tools run with the project as their working directory; a relative project path would
+    // then point at the wrong place for `node_modules/.bin/…`.
+    let dir = &dir
+        .canonicalize()
+        .with_context(|| format!("{} does not exist", dir.display()))?;
     if !dir.join(SOURCE).is_file() {
         bail!("{} not found", dir.join(SOURCE).display());
     }

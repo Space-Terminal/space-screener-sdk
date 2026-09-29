@@ -193,6 +193,18 @@ pub fn print_summary(built: &Built) {
     println!("entry points: {}", exports.join(", "));
 }
 
+/// The catalog's extra rules (categories, description, source): a warning here, an error on
+/// `st publish`.
+pub fn print_catalog_readiness(built: &Built) {
+    match space_screener_check::registry::check(&built.manifest_text, &built.manifest) {
+        Ok(info) => println!("catalog: ready ({})", info.categories.join(", ")),
+        Err(report) => eprintln!(
+            "warning: not ready for the catalog (`st publish` refuses it):\n  {}",
+            problems(&report)
+        ),
+    }
+}
+
 pub fn screener_id(dir: &Path, explicit: Option<String>) -> Result<String> {
     if let Some(id) = explicit {
         return Ok(id);

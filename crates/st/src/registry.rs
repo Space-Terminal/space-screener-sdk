@@ -22,6 +22,7 @@ pub const CONFIG_ENV: &str = "ST_CONFIG_DIR";
 const TOKEN_PREFIX: &str = "stp_";
 const CREDENTIALS_FILE: &str = "credentials.yaml";
 const MAX_RECORDING_BYTES: usize = 4 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 /// Upload plus the server's trial run, which waits for a free slot.
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -246,6 +247,21 @@ pub fn publish(
             project::problems(&report)
         )
     })?;
+    if built.manifest_text.len() > MAX_MANIFEST_BYTES {
+        bail!(
+            "{} is {} KiB; the registry takes manifests up to {} KiB",
+            manifest::FILE,
+            built.manifest_text.len() / 1024,
+            MAX_MANIFEST_BYTES / 1024
+        );
+    }
+    if !built.manifest.version.build.is_empty() {
+        bail!(
+            "version {} has build metadata (+{}), which does not order versions; the registry refuses it — bump the version instead",
+            built.manifest.version,
+            built.manifest.version.build
+        );
+    }
     let recording = recording
         .map(|path| load_recording(&path, &built))
         .transpose()?;
@@ -313,13 +329,35 @@ pub fn publish(
             .unwrap_or("error");
         let message = value.get("message").and_then(Value::as_str).unwrap_or("");
         print_issues("error", value.get("details"));
+        let retry_after = value
+            .get("retry_after")
+            .and_then(Value::as_u64)
+            .map_or_else(
+                || " — try again in a minute".to_string(),
+                |secs| format!(" — try again in {secs} s"),
+            );
         let hint = match code {
             "unauthorized" | "token_invalid" => {
-                " — the token was revoked or mistyped; make a new one and run `st login`"
+                " — the token was revoked or mistyped; make a new one and run `st login`".to_string()
             }
-            "not_author" => " — set your author name on the author page first",
-            "version_exists" | "version_not_greater" => " — raise `version` in manifest.yaml",
-            _ => "",
+            "not_author" => " — set your author name on the author page first".to_string(),
+            "version_exists" | "version_not_greater" => {
+                " — raise `version` in manifest.yaml".to_string()
+            }
+            "id_taken" => " — the id belongs to another author; change `id` in manifest.yaml".to_string(),
+            "screener_revoked" => {
+                " — a moderator removed this screener from the catalog; new versions are not accepted"
+                    .to_string()
+            }
+            "too_many_pending" => format!(
+                " — wait for the moderator's decision on the versions already sent: {}/author",
+                target.registry
+            ),
+            "invalid_recording" => {
+                " — pass a file written by `st record`, or publish without --recording".to_string()
+            }
+            "server_busy" | "rate_limited" => retry_after,
+            _ => String::new(),
         };
         bail!("{code}: {message} (HTTP {status}){hint}");
     }

@@ -52,7 +52,7 @@ enum Command {
         #[arg(long, default_value = ".")]
         dir: PathBuf,
     },
-    /// Check manifest.yaml and an already built screener.wasm
+    /// Check manifest.yaml and an already built screener.wasm (and whether the catalog would take it)
     Validate {
         #[arg(long, default_value = ".")]
         dir: PathBuf,
@@ -174,6 +174,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Validate { dir } => {
             let built = project::validate(&dir)?;
             project::print_summary(&built);
+            project::print_catalog_readiness(&built);
             println!("ok");
             Ok(())
         }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use space_screener_check::Recording;
-use space_screener_harness::{Alert, Output, Row, Status, replay};
+use space_screener_harness::{Alert, Intent, Output, Row, Status, replay};
 
 use crate::project::{self, Built};
 
@@ -12,13 +12,16 @@ pub const RECORDINGS_DIR: &str = "recordings";
 const EXPECTED_SUFFIX: &str = ".expected.json";
 const DIFF_LINES: usize = 20;
 
-/// What a replay must reproduce: the rows the pane would show, the alerts and the status.
-/// Logs and CPU numbers are left out — they change without the output changing.
+/// What a replay must reproduce: the rows the pane would show, the alerts, the status and the
+/// markets clicks opened. Logs and CPU numbers are left out — they change without the output
+/// changing.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct Snapshot {
     rows: Vec<Row>,
     alerts: Vec<Alert>,
     status: Option<Status>,
+    #[serde(default)]
+    intents: Vec<Intent>,
 }
 
 impl From<&Output> for Snapshot {
@@ -27,6 +30,7 @@ impl From<&Output> for Snapshot {
             rows: output.rows.clone(),
             alerts: output.alerts.clone(),
             status: output.status.clone(),
+            intents: output.intents.clone(),
         }
     }
 }
@@ -227,6 +231,13 @@ fn diff(expected: &Snapshot, actual: &Snapshot) -> Vec<String> {
             actual.alerts.len()
         ));
     }
+    if expected.intents != actual.intents {
+        lines.push(format!(
+            "~ clicks opened: {} expected, {} now",
+            expected.intents.len(),
+            actual.intents.len()
+        ));
+    }
     if expected.status != actual.status {
         let show = |s: &Option<Status>| {
             s.as_ref()
@@ -267,11 +278,13 @@ mod tests {
             rows: vec![row("a", 1), row("b", 2)],
             alerts: Vec::new(),
             status: None,
+            intents: Vec::new(),
         };
         let actual = Snapshot {
             rows: vec![row("b", 3), row("c", 4)],
             alerts: Vec::new(),
             status: None,
+            intents: Vec::new(),
         };
         let lines = diff(&expected, &actual);
         assert_eq!(lines.len(), 3, "{lines:?}");
