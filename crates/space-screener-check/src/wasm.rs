@@ -1,0 +1,910 @@
+//! Moderation of `screener.wasm` before it is compiled: a plugin cannot do anything that is
+//! not in its import list, so moderation is an allowlist of imports.
+
+use std::collections::BTreeSet;
+
+use wasmparser::{
+    CompositeInnerType, Encoding, ExternalKind, Operator, Parser, Payload, TypeRef, ValType,
+    Validator, WasmFeatures,
+};
+
+use crate::report::{Code, Report};
+
+pub const FILE: &str = "screener.wasm";
+pub const MAX_WASM_BYTES: usize = 10 * 1024 * 1024;
+
+pub const ENV_MODULE: &str = "extism:host/env";
+pub const USER_MODULE: &str = "extism:host/user";
+
+/// Extism kernel functions the PDK needs: memory, call input/output, config and vars.
+/// `http_*` and `log_*` are not here — network and logs go through the terminal's host
+/// functions only.
+pub const ENV_IMPORTS: &[&str] = &[
+    "alloc",
+    "free",
+    "length",
+    "length_unsafe",
+    "load_u8",
+    "load_u64",
+    "store_u8",
+    "store_u64",
+    "input_length",
+    "input_load_u8",
+    "input_load_u64",
+    "output_set",
+    "error_set",
+    "config_get",
+    "var_get",
+    "var_set",
+];
+
+/// Host functions of ABI v1 (`extism:host/user`).
+pub const HOST_FUNCTIONS: &[&str] = &[
+    "http",
+    "http_batch",
+    "tickers",
+    "symbols",
+    "exchanges",
+    "history_cluster",
+    "history_replay",
+    "kv_get",
+    "kv_set",
+    "emit_rows",
+    "expire",
+    "emit_alert",
+    "set_status",
+    "open_market",
+    "open_spread",
+    "log",
+    "now_ms",
+];
+
+pub const REQUIRED_EXPORTS: &[&str] = &["init", "on_timer"];
+
+/// WebAssembly 2.0 — what Rust (wasm32-unknown-unknown) and the extism-js QuickJS build emit —
+/// plus tail calls and extended constant expressions, which toolchains may turn on by default
+/// and which allocate nothing. Left out: GC (objects outside the linear-memory limit),
+/// threads, memory64, multi-memory, exceptions, relaxed SIMD and components, which the
+/// terminal neither needs nor accounts for.
+pub const FEATURES: WasmFeatures = WasmFeatures::WASM2
+    .union(WasmFeatures::TAIL_CALL)
+    .union(WasmFeatures::EXTENDED_CONST);
+
+const LEFT_OUT: &str =
+    "GC, threads and shared memory, memory64, multi-memory, exceptions, relaxed SIMD";
+
+/// Extism kernel signatures (extism 1.30 runtime exports and host functions, extism-pdk 1.4.1
+/// declarations); a mismatch fails at link time in the terminal.
+const ENV_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
+    ("alloc", &[ValType::I64], &[ValType::I64]),
+    ("free", &[ValType::I64], &[]),
+    ("length", &[ValType::I64], &[ValType::I64]),
+    ("length_unsafe", &[ValType::I64], &[ValType::I64]),
+    ("load_u8", &[ValType::I64], &[ValType::I32]),
+    ("load_u64", &[ValType::I64], &[ValType::I64]),
+    ("store_u8", &[ValType::I64, ValType::I32], &[]),
+    ("store_u64", &[ValType::I64, ValType::I64], &[]),
+    ("input_length", &[], &[ValType::I64]),
+    ("input_load_u8", &[ValType::I64], &[ValType::I32]),
+    ("input_load_u64", &[ValType::I64], &[ValType::I64]),
+    ("output_set", &[ValType::I64, ValType::I64], &[]),
+    ("error_set", &[ValType::I64], &[]),
+    ("config_get", &[ValType::I64], &[ValType::I64]),
+    ("var_get", &[ValType::I64], &[ValType::I64]),
+    ("var_set", &[ValType::I64, ValType::I64], &[]),
+];
+
+const HOST_SIGNATURE: (&[ValType], &[ValType]) = (&[ValType::I64], &[ValType::I64]);
+
+fn expected_signature(
+    module: &str,
+    name: &str,
+) -> Option<(&'static [ValType], &'static [ValType])> {
+    match module {
+        ENV_MODULE => ENV_SIGNATURES
+            .iter()
+            .find(|(known, ..)| *known == name)
+            .map(|(_, params, results)| (*params, *results)),
+        USER_MODULE => is_host_function(name).then_some(HOST_SIGNATURE),
+        _ => None,
+    }
+}
+
+fn wat_signature((params, results): (&[ValType], &[ValType])) -> String {
+    let list = |types: &[ValType]| {
+        types
+            .iter()
+            .map(|ty| ty.to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    match (params.is_empty(), results.is_empty()) {
+        (true, true) => "(func)".to_string(),
+        (true, false) => format!("(func (result {}))", list(results)),
+        (false, true) => format!("(func (param {}))", list(params)),
+        (false, false) => format!("(func (param {}) (result {}))", list(params), list(results)),
+    }
+}
+
+/// Tables live outside the linear memory, so the memory limit does not cover them. Real
+/// modules have one or two (Rust: 1 table of ~100 functions, QuickJS: 2 tables, ~960 elements
+/// in total); the caps leave ×10 and ×50 of headroom.
+pub const MAX_TABLES: usize = 20;
+pub const MAX_TABLE_ELEMENTS: u64 = 50_000;
+
+/// Compiling takes memory in proportion to the largest function, not to the whole module:
+/// about 1 KiB per byte of body in the worst shapes (if/else chains, br_table targets), once
+/// per function compiled at the same time. Measured on wasmtime 43 (Cranelift), compiling one
+/// function at a time, a module at every limit below peaks at ~250 MiB and takes ~1.5 s.
+/// Real modules: at most 1 566 functions, 50 793-byte bodies, nesting 293 and 254 br_table
+/// targets (the extism-js QuickJS build) — ×4 to ×39 below the limits.
+pub const MAX_FUNCTIONS: usize = 10_000;
+pub const MAX_FUNCTION_BYTES: usize = 256 * 1024;
+/// Blocks, loops, ifs and try_tables open at once inside one function.
+pub const MAX_NESTING: u32 = 2_000;
+pub const MAX_BR_TABLE_TARGETS: usize = 10_000;
+
+/// Code that wasmtime/Extism run at instantiation, before the host has a cancel handle: an
+/// endless loop there cannot be interrupted. Refused under any export kind.
+pub const FORBIDDEN_EXPORTS: &[&str] = &["_start", "_initialize", "__wasm_call_ctors", "hs_init"];
+
+/// Entry points exported as functions. Only the ones the host acts on are named.
+pub const ENTRY_POINTS: &[&str] = &["init", "on_timer", "on_click", "on_params", "on_batch"];
+
+/// What the host needs to know about a module that passed moderation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WasmInfo {
+    pub on_click: bool,
+    pub on_params: bool,
+    pub imports: Vec<(String, String)>,
+    /// Function exports only.
+    pub exports: Vec<String>,
+    /// Bytes of the code section (function bodies): compile time and memory scale with it.
+    pub code_bytes: usize,
+}
+
+pub fn is_host_function(name: &str) -> bool {
+    HOST_FUNCTIONS.contains(&name)
+}
+
+/// Checks size, validity, imports and exports. The report lists every problem found.
+pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
+    let mut r = Report::default();
+    if bytes.len() > MAX_WASM_BYTES {
+        r.error(
+            Code::TooLarge,
+            "",
+            format!(
+                "{FILE} is {} bytes, the limit is {MAX_WASM_BYTES}",
+                bytes.len()
+            ),
+        );
+        return Err(r);
+    }
+    if is_component(bytes) {
+        r.error(
+            Code::InvalidWasm,
+            "",
+            "screener.wasm is a WebAssembly component; build a core module (a cdylib for wasm32-unknown-unknown)",
+        );
+        return Err(r);
+    }
+    if let Err(e) = Validator::new_with_features(WasmFeatures::all()).validate_all(bytes) {
+        r.error(
+            Code::InvalidWasm,
+            "",
+            format!("module does not validate: {e}"),
+        );
+        return Err(r);
+    }
+    if let Err(e) = Validator::new_with_features(FEATURES).validate_all(bytes) {
+        r.error(
+            Code::InvalidWasm,
+            "",
+            format!(
+                "the module uses a WebAssembly feature screeners may not use ({LEFT_OUT}): {e}"
+            ),
+        );
+        return Err(r);
+    }
+
+    let mut info = WasmInfo::default();
+    let mut func_types: Vec<Option<(Vec<ValType>, Vec<ValType>)>> = Vec::new();
+    let mut imported_tables = 0u32;
+    let mut tables: Vec<(u64, Option<u64>)> = Vec::new();
+    let mut grown: BTreeSet<u32> = BTreeSet::new();
+    let mut imported_funcs = 0u32;
+    let mut shape = Shape::default();
+    for payload in Parser::new(0).parse_all(bytes) {
+        let payload = match payload {
+            Ok(payload) => payload,
+            Err(e) => {
+                r.error(Code::InvalidWasm, "", e.to_string());
+                return Err(r);
+            }
+        };
+        match payload {
+            Payload::TypeSection(reader) => {
+                for group in reader {
+                    let group = match group {
+                        Ok(group) => group,
+                        Err(e) => {
+                            r.error(Code::InvalidWasm, "", e.to_string());
+                            return Err(r);
+                        }
+                    };
+                    for sub in group.into_types() {
+                        func_types.push(match sub.composite_type.inner {
+                            CompositeInnerType::Func(ty) => {
+                                Some((ty.params().to_vec(), ty.results().to_vec()))
+                            }
+                            _ => None,
+                        });
+                    }
+                }
+            }
+            Payload::ImportSection(reader) => {
+                for import in reader.into_imports() {
+                    let import = match import {
+                        Ok(import) => import,
+                        Err(e) => {
+                            r.error(Code::InvalidWasm, "", e.to_string());
+                            return Err(r);
+                        }
+                    };
+                    let path = format!("import {}::{}", import.module, import.name);
+                    let allowed = match import.module {
+                        ENV_MODULE => ENV_IMPORTS.contains(&import.name),
+                        USER_MODULE => is_host_function(import.name),
+                        _ => false,
+                    };
+                    if !allowed {
+                        r.error(
+                            Code::ForbiddenImport,
+                            &path,
+                            format!(
+                                "{}::{} is not available to screeners{}",
+                                import.module,
+                                import.name,
+                                hint(import.module, import.name)
+                            ),
+                        );
+                    }
+                    match import.ty {
+                        TypeRef::Func(index) => {
+                            imported_funcs += 1;
+                            let expected = expected_signature(import.module, import.name);
+                            let declared = func_types.get(index as usize).and_then(Option::as_ref);
+                            if let Some(expected) = expected
+                                && declared.is_none_or(|(params, results)| {
+                                    (params.as_slice(), results.as_slice()) != expected
+                                })
+                            {
+                                r.error(
+                                    Code::ForbiddenImport,
+                                    &path,
+                                    format!(
+                                        "{}::{} must be declared as {}",
+                                        import.module,
+                                        import.name,
+                                        wat_signature(expected)
+                                    ),
+                                );
+                            }
+                        }
+                        other => {
+                            if let TypeRef::Table(_) = other {
+                                imported_tables += 1;
+                            }
+                            if allowed {
+                                r.error(
+                                    Code::ForbiddenImport,
+                                    &path,
+                                    format!(
+                                        "imports a {}; screeners may import functions only",
+                                        import_kind(&other)
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    info.imports
+                        .push((import.module.to_string(), import.name.to_string()));
+                }
+            }
+            Payload::TableSection(reader) => {
+                for table in reader {
+                    match table {
+                        Ok(table) => tables.push((table.ty.initial, table.ty.maximum)),
+                        Err(e) => {
+                            r.error(Code::InvalidWasm, "", e.to_string());
+                            return Err(r);
+                        }
+                    }
+                }
+            }
+            Payload::CodeSectionStart { range, count, .. } => {
+                info.code_bytes = range.len();
+                shape.functions = count as usize;
+            }
+            Payload::CodeSectionEntry(body) => {
+                let function = imported_funcs + shape.seen;
+                shape.seen += 1;
+                shape.body(function, body.range().len());
+                let mut operators = match body.get_operators_reader() {
+                    Ok(operators) => operators,
+                    Err(e) => {
+                        r.error(Code::InvalidWasm, "", e.to_string());
+                        return Err(r);
+                    }
+                };
+                let mut depth = 0u32;
+                while !operators.eof() {
+                    match operators.read() {
+                        Ok(Operator::TableGrow { table }) => {
+                            grown.insert(table);
+                        }
+                        Ok(
+                            Operator::Block { .. }
+                            | Operator::Loop { .. }
+                            | Operator::If { .. }
+                            | Operator::TryTable { .. },
+                        ) => {
+                            depth += 1;
+                            shape.nesting(function, depth);
+                        }
+                        Ok(Operator::End) => depth = depth.saturating_sub(1),
+                        Ok(Operator::BrTable { targets }) => {
+                            shape.br_table(function, targets.len() as usize);
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            r.error(Code::InvalidWasm, "", e.to_string());
+                            return Err(r);
+                        }
+                    }
+                }
+            }
+            Payload::StartSection { .. } => r.error(
+                Code::ForbiddenExport,
+                "start",
+                "the module has a start section (code that runs at instantiation)",
+            ),
+            Payload::ExportSection(reader) => {
+                for export in reader {
+                    let export = match export {
+                        Ok(export) => export,
+                        Err(e) => {
+                            r.error(Code::InvalidWasm, "", e.to_string());
+                            return Err(r);
+                        }
+                    };
+                    if FORBIDDEN_EXPORTS.contains(&export.name) {
+                        r.error(
+                            Code::ForbiddenExport,
+                            format!("export {}", export.name),
+                            format!(
+                                "`{}` is a WASI/C runtime entry point; build a cdylib for wasm32-unknown-unknown",
+                                export.name
+                            ),
+                        );
+                    }
+                    if export.kind == ExternalKind::Func {
+                        info.exports.push(export.name.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    check_tables(&tables, imported_tables, &grown, &mut r);
+    shape.check(&mut r);
+
+    for required in REQUIRED_EXPORTS {
+        if !info.exports.iter().any(|export| export == required) {
+            r.error(
+                Code::InvalidWasm,
+                format!("export {required}"),
+                format!(
+                    "missing function export `{required}` — did you call space_screener::export_screener!(YourType)?"
+                ),
+            );
+        }
+    }
+    if !r.is_ok() {
+        return Err(r);
+    }
+    info.on_click = info.exports.iter().any(|export| export == "on_click");
+    info.on_params = info.exports.iter().any(|export| export == "on_params");
+    Ok(info)
+}
+
+/// The largest function body, nesting and br_table of a module, with the function holding each.
+#[derive(Debug, Default)]
+struct Shape {
+    functions: usize,
+    seen: u32,
+    largest: (usize, u32),
+    over_bytes: usize,
+    deepest: (u32, u32),
+    over_nesting: usize,
+    widest: (usize, u32),
+    over_br_table: usize,
+}
+
+impl Shape {
+    fn body(&mut self, function: u32, bytes: usize) {
+        if bytes > self.largest.0 {
+            self.largest = (bytes, function);
+        }
+        if bytes > MAX_FUNCTION_BYTES {
+            self.over_bytes += 1;
+        }
+    }
+
+    fn nesting(&mut self, function: u32, depth: u32) {
+        if depth > self.deepest.0 {
+            self.deepest = (depth, function);
+        }
+        if depth == MAX_NESTING + 1 {
+            self.over_nesting += 1;
+        }
+    }
+
+    fn br_table(&mut self, function: u32, targets: usize) {
+        if targets > self.widest.0 {
+            self.widest = (targets, function);
+        }
+        if targets > MAX_BR_TABLE_TARGETS {
+            self.over_br_table += 1;
+        }
+    }
+
+    fn check(&self, r: &mut Report) {
+        if self.functions > MAX_FUNCTIONS {
+            r.error(
+                Code::InvalidWasm,
+                "functions",
+                format!("{} functions, the limit is {MAX_FUNCTIONS}", self.functions),
+            );
+        }
+        let (bytes, function) = self.largest;
+        if self.over_bytes > 0 {
+            r.error(
+                Code::InvalidWasm,
+                format!("function {function}"),
+                format!(
+                    "{} KiB of code, the limit is {} KiB per function ({} over it); split it up",
+                    bytes.div_ceil(1024),
+                    MAX_FUNCTION_BYTES / 1024,
+                    self.over_bytes
+                ),
+            );
+        }
+        let (depth, function) = self.deepest;
+        if self.over_nesting > 0 {
+            r.error(
+                Code::InvalidWasm,
+                format!("function {function}"),
+                format!("blocks nest {depth} deep, the limit is {MAX_NESTING}"),
+            );
+        }
+        let (targets, function) = self.widest;
+        if self.over_br_table > 0 {
+            r.error(
+                Code::InvalidWasm,
+                format!("function {function}"),
+                format!("a br_table has {targets} targets, the limit is {MAX_BR_TABLE_TARGETS}"),
+            );
+        }
+    }
+}
+
+fn is_component(bytes: &[u8]) -> bool {
+    matches!(
+        Parser::new(0).parse_all(bytes).next(),
+        Some(Ok(Payload::Version {
+            encoding: Encoding::Component,
+            ..
+        }))
+    )
+}
+
+fn import_kind(ty: &TypeRef) -> &'static str {
+    match ty {
+        TypeRef::Func(_) | TypeRef::FuncExact(_) => "function",
+        TypeRef::Table(_) => "table",
+        TypeRef::Memory(_) => "memory",
+        TypeRef::Global(_) => "global",
+        TypeRef::Tag(_) => "tag",
+    }
+}
+
+/// A table without a maximum stays at its initial size unless code runs `table.grow` on it.
+fn check_tables(
+    tables: &[(u64, Option<u64>)],
+    imported: u32,
+    grown: &BTreeSet<u32>,
+    r: &mut Report,
+) {
+    if tables.len() > MAX_TABLES {
+        r.error(
+            Code::InvalidWasm,
+            "tables",
+            format!(
+                "the module declares {} tables, the limit is {MAX_TABLES}",
+                tables.len()
+            ),
+        );
+    }
+    let mut total = 0u64;
+    for (i, (initial, maximum)) in tables.iter().enumerate() {
+        let index = imported + u32::try_from(i).unwrap_or(u32::MAX);
+        let bound = match maximum {
+            Some(maximum) => *maximum,
+            None if !grown.contains(&index) => *initial,
+            None => {
+                r.error(
+                    Code::InvalidWasm,
+                    format!("table {index}"),
+                    "table.grow on a table without a declared maximum; declare one",
+                );
+                continue;
+            }
+        };
+        total = total.saturating_add(bound);
+    }
+    if total > MAX_TABLE_ELEMENTS {
+        r.error(
+            Code::InvalidWasm,
+            "tables",
+            format!(
+                "tables may hold {total} elements, the limit is {MAX_TABLE_ELEMENTS} (tables are not covered by limits.memory_mb)"
+            ),
+        );
+    }
+}
+
+fn hint(module: &str, name: &str) -> &'static str {
+    match (module, name) {
+        (ENV_MODULE, n) if n.starts_with("log_") || n == "get_log_level" => {
+            " (use space_screener::info!/warn! instead of extism_pdk logging)"
+        }
+        (ENV_MODULE, n) if n.starts_with("http_") => {
+            " (use space_screener::host::http; enable extism-pdk with default-features = false)"
+        }
+        (m, _) if m.starts_with("wasi") => {
+            " (Rust: build for wasm32-unknown-unknown, not wasip1 — std::time, std::fs and threads are unavailable; TypeScript: build with `st build`, which links stubs for js-pdk's WASI imports)"
+        }
+        ("__wbindgen_placeholder__", _) | ("wbg", _) => {
+            " (wasm-bindgen crates such as getrandom/js or chrono/wasmbind do not run in the terminal)"
+        }
+        _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ENTRY: &str = r#"(func (export "init") (result i32) i32.const 0) (func (export "on_timer") (result i32) i32.const 0)"#;
+
+    fn module(body: &str) -> Vec<u8> {
+        wat::parse_str(format!("(module {body})")).unwrap()
+    }
+
+    fn report(body: &str) -> String {
+        inspect(&module(body)).unwrap_err().to_string()
+    }
+
+    fn first_code(body: &str) -> &'static str {
+        inspect(&module(body)).unwrap_err().errors[0].code.as_str()
+    }
+
+    #[test]
+    fn allows_kernel_and_host_imports_only() {
+        let info = inspect(&module(&format!(
+            r#"(import "extism:host/env" "alloc" (func (param i64) (result i64)))
+               (import "extism:host/user" "http" (func (param i64) (result i64)))
+               {ENTRY} (func (export "on_click") (result i32) i32.const 0)"#
+        )))
+        .unwrap();
+        assert!(info.on_click);
+        assert!(!info.on_params);
+        assert_eq!(info.imports.len(), 2);
+
+        let forbidden = |module_name: &str, name: &str| {
+            first_code(&format!(
+                r#"(import "{module_name}" "{name}" (func (param i64) (result i64))) {ENTRY}"#
+            ))
+        };
+        assert_eq!(
+            forbidden("extism:host/env", "http_request"),
+            "forbidden_import"
+        );
+        assert_eq!(forbidden("extism:host/env", "log_info"), "forbidden_import");
+        assert_eq!(
+            forbidden("extism:host/user", "place_order"),
+            "forbidden_import"
+        );
+        assert_eq!(
+            forbidden("wasi_snapshot_preview1", "fd_write"),
+            "forbidden_import"
+        );
+        assert_eq!(
+            inspect(b"not wasm").unwrap_err().errors[0].code,
+            Code::InvalidWasm
+        );
+    }
+
+    #[test]
+    fn every_problem_is_reported_with_hints() {
+        let problems = report(
+            r#"(import "extism:host/env" "http_request" (func (param i64 i64) (result i64)))
+               (import "extism:host/env" "log_info" (func (param i64)))
+               (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))
+               (import "extism:host/user" "place_order" (func (param i64) (result i64)))
+               (func (export "init") (result i32) i32.const 0)"#,
+        );
+        for needle in [
+            "extism:host/env::http_request",
+            "extism:host/env::log_info",
+            "info!/warn!",
+            "wasi_snapshot_preview1::fd_write",
+            "wasm32-unknown-unknown",
+            "extism:host/user::place_order",
+            "missing function export `on_timer`",
+        ] {
+            assert!(
+                problems.contains(needle),
+                "missing `{needle}` in:\n{problems}"
+            );
+        }
+    }
+
+    #[test]
+    fn start_section_and_runtime_entry_points_are_refused() {
+        assert_eq!(
+            first_code(&format!(
+                r#"(func $spin (loop $l (br $l))) (start $spin) {ENTRY}"#
+            )),
+            "forbidden_export"
+        );
+        let problems = report(&format!(
+            r#"{ENTRY} (func (export "_initialize")) (func (export "__wasm_call_ctors"))"#
+        ));
+        assert!(problems.contains("export _initialize"), "{problems}");
+        assert!(problems.contains("export __wasm_call_ctors"), "{problems}");
+    }
+
+    #[test]
+    fn forbidden_names_are_refused_under_any_export_kind() {
+        assert_eq!(
+            first_code(&format!(
+                r#"{ENTRY} (global (export "_start") i32 (i32.const 0))"#
+            )),
+            "forbidden_export"
+        );
+        assert_eq!(
+            first_code(&format!(r#"{ENTRY} (memory (export "_initialize") 1)"#)),
+            "forbidden_export"
+        );
+    }
+
+    #[test]
+    fn required_exports_must_be_functions() {
+        let problems = report(
+            r#"(global (export "init") i32 (i32.const 0))
+               (func (export "on_timer") (result i32) i32.const 0)"#,
+        );
+        assert!(
+            problems.contains("missing function export `init`"),
+            "{problems}"
+        );
+    }
+
+    #[test]
+    fn tables_are_capped_because_the_memory_limit_does_not_cover_them() {
+        let many_elements: String = (0..10)
+            .map(|i| format!("(table $t{i} 10000000 funcref)"))
+            .collect();
+        let problems = report(&format!("{many_elements} {ENTRY}"));
+        assert!(
+            problems.contains("tables may hold 100000000 elements"),
+            "{problems}"
+        );
+        let many_tables: String = (0..=MAX_TABLES)
+            .map(|i| format!("(table $t{i} 1 1 funcref)"))
+            .collect();
+        assert!(report(&format!("{many_tables} {ENTRY}")).contains("declares 21 tables"));
+        let growable = format!(
+            r#"(table $t 1 funcref) {ENTRY}
+               (func (export "grow") (result i32) (table.grow $t (ref.null func) (i32.const 1000000000)))"#
+        );
+        assert!(report(&growable).contains("table.grow on a table without a declared maximum"));
+        let bounded = format!(
+            r#"(table $t 1 {MAX_TABLE_ELEMENTS} funcref) {ENTRY}
+               (func (export "grow") (result i32) (table.grow $t (ref.null func) (i32.const 10)))"#
+        );
+        assert!(inspect(&module(&bounded)).is_ok());
+        // What the extism-js QuickJS build declares: a fixed table and one without a maximum
+        // that no code grows.
+        assert!(
+            inspect(&module(&format!(
+                "(table 943 943 funcref) (table 17 funcref) {ENTRY}"
+            )))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn only_webassembly_2_modules_are_accepted() {
+        let component = wat::parse_str(
+            r#"(component (core module
+                 (func (export "init") (result i32) i32.const 0)
+                 (func (export "on_timer") (result i32) i32.const 0)))"#,
+        )
+        .unwrap();
+        let problems = inspect(&component).unwrap_err().to_string();
+        assert!(
+            problems.contains("is a WebAssembly component"),
+            "{problems}"
+        );
+        let gc = report(&format!(
+            r#"(type $a (array (mut i64))) {ENTRY}
+               (func (export "big") (result i32) (drop (array.new $a (i64.const 1) (i32.const 100000000))) i32.const 0)"#
+        ));
+        assert!(gc.starts_with("invalid_wasm"), "{gc}");
+        let shared = report(&format!("(memory 1 1 shared) {ENTRY}"));
+        assert!(shared.starts_with("invalid_wasm"), "{shared}");
+    }
+
+    #[test]
+    fn only_functions_may_be_imported() {
+        for import in [
+            r#"(import "extism:host/env" "alloc" (memory 1))"#,
+            r#"(import "extism:host/env" "free" (table 1 funcref))"#,
+            r#"(import "extism:host/user" "http" (global i64))"#,
+        ] {
+            let problems = report(&format!("{import} {ENTRY}"));
+            assert!(
+                problems.contains("screeners may import functions only"),
+                "{problems}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_functions_must_have_the_abi_signature() {
+        let problems = report(&format!(
+            r#"(import "extism:host/user" "http" (func (param i32) (result i32))) {ENTRY}"#
+        ));
+        assert!(
+            problems.contains(
+                "extism:host/user::http must be declared as (func (param i64) (result i64))"
+            ),
+            "{problems}"
+        );
+        assert!(
+            inspect(&module(&format!(
+                r#"(import "extism:host/user" "http" (func (param i64) (result i64))) {ENTRY}"#
+            )))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn kernel_imports_must_have_extism_signatures() {
+        let problems = report(&format!(
+            r#"(import "extism:host/env" "alloc" (func (param i32) (result i32))) {ENTRY}"#
+        ));
+        assert!(
+            problems.contains(
+                "extism:host/env::alloc must be declared as (func (param i64) (result i64))"
+            ),
+            "{problems}"
+        );
+        assert!(
+            inspect(&module(&format!(
+                r#"(import "extism:host/env" "store_u8" (func (param i64 i32)))
+                   (import "extism:host/env" "input_length" (func (result i64)))
+                   {ENTRY}"#
+            )))
+            .is_ok()
+        );
+        for name in ENV_IMPORTS {
+            assert!(expected_signature(ENV_MODULE, name).is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn tail_calls_and_extended_consts_are_allowed() {
+        assert!(
+            inspect(&module(&format!(
+                r#"(global i32 (i32.add (i32.const 1) (i32.const 2)))
+                   (func $zero (result i32) i32.const 0)
+                   (func (export "tail") (result i32) (return_call $zero))
+                   {ENTRY}"#
+            )))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn broken_bytes_are_not_blamed_on_features() {
+        for bytes in [&b"not wasm"[..], &b""[..], &b"\0asm\x01\0\0\0\x01"[..]] {
+            let problems = inspect(bytes).unwrap_err().to_string();
+            assert!(problems.contains("does not validate"), "{problems}");
+            assert!(!problems.contains("may not use"), "{problems}");
+        }
+        let shared = report(&format!("(memory 1 1 shared) {ENTRY}"));
+        assert!(shared.contains("may not use (GC, threads"), "{shared}");
+    }
+
+    #[test]
+    fn function_count_is_capped() {
+        let tiny = |n: usize| "(func)".repeat(n);
+        assert!(inspect(&module(&format!("{} {ENTRY}", tiny(MAX_FUNCTIONS - 2)))).is_ok());
+        let problems = report(&format!("{} {ENTRY}", tiny(MAX_FUNCTIONS - 1)));
+        assert!(
+            problems.contains("10001 functions, the limit is 10000"),
+            "{problems}"
+        );
+    }
+
+    #[test]
+    fn function_bodies_are_capped() {
+        let body = |n: usize| format!("(func {})", "nop ".repeat(n));
+        // A body is its locals vector (1 byte), the code and `end` (1 byte).
+        assert!(
+            inspect(&module(&format!(
+                "{} {ENTRY}",
+                body(MAX_FUNCTION_BYTES - 2)
+            )))
+            .is_ok()
+        );
+        let problems = report(&format!("{} {ENTRY}", body(MAX_FUNCTION_BYTES - 1)));
+        assert!(
+            problems.contains(
+                "function 0: 257 KiB of code, the limit is 256 KiB per function (1 over it)"
+            ),
+            "{problems}"
+        );
+    }
+
+    #[test]
+    fn nesting_is_capped() {
+        let nested = |n: u32| {
+            let n = n as usize;
+            format!("(func {} {})", "(block ".repeat(n), ")".repeat(n))
+        };
+        assert!(inspect(&module(&format!("{} {ENTRY}", nested(MAX_NESTING)))).is_ok());
+        let problems = report(&format!("{ENTRY} {}", nested(MAX_NESTING + 1)));
+        assert!(
+            problems.contains("function 2: blocks nest 2001 deep, the limit is 2000"),
+            "{problems}"
+        );
+    }
+
+    #[test]
+    fn br_table_targets_are_capped() {
+        let table = |n: usize| {
+            format!(
+                "(func (block (br_table {} (i32.const 0))))",
+                "0 ".repeat(n + 1)
+            )
+        };
+        assert!(inspect(&module(&format!("{} {ENTRY}", table(MAX_BR_TABLE_TARGETS)))).is_ok());
+        let problems = report(&format!("{} {ENTRY}", table(MAX_BR_TABLE_TARGETS + 1)));
+        assert!(
+            problems.contains("function 0: a br_table has 10001 targets, the limit is 10000"),
+            "{problems}"
+        );
+    }
+
+    #[test]
+    fn oversized_module_is_too_large() {
+        let big = vec![0u8; MAX_WASM_BYTES + 1];
+        assert_eq!(inspect(&big).unwrap_err().errors[0].code, Code::TooLarge);
+    }
+}

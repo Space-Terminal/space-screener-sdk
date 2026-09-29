@@ -1,12 +1,15 @@
 # space-screener-sdk
 
-> Space Terminal screeners are Rust libraries compiled to wasm32-unknown-unknown (no WASI) and run by the terminal in an Extism sandbox. The plugin has no network, files, clock or threads: it calls host functions for data and HTTP and emits table rows. Crate `space-screener` (PDK), CLI `st`. Full contract: ABI.md. Agent guide: SKILL.md.
+> Space Terminal screeners are Rust libraries (or TypeScript modules, `lang: ts`) compiled to wasm32-unknown-unknown (no WASI) and run by the terminal in an Extism sandbox. The plugin has no network, files, clock or threads: it calls host functions for data and HTTP and emits table rows. Crate `space-screener` (PDK), CLI `st`. Full contract: ABI.md. Agent guide: SKILL.md.
 
 ## Workflow
 - `st init <dir> --id author.name` → Cargo.toml (cdylib), manifest.yaml, src/lib.rs
 - `st build` → screener.wasm + the terminal's validation (manifest, imports, exports)
 - `st dev` → install into the running terminal, open a pane, rebuild/reinstall on save, print log
 - `st rows [--json]`, `st logs [-f]`, `st list` → inspect the running plugin
+- `st record [--seconds N]` → restart the running plugin and save its data replies to recordings/<UTC>.json; `st test [--update]` → replay recordings headless, compare rows/alerts/status/clicks with recordings/*.expected.json (first run writes it)
+- `st validate` → also prints `catalog: ready` or what the catalog lacks; `st login` (publish token stp_… from the store's author page; or ST_TOKEN) + `st publish [--recording FILE]` → upload to the Space Market registry; every version waits for a moderator (only when the user asks)
+- TypeScript: `st init <dir> --lang ts` → package.json, tsconfig.json, src/index.ts, pdk/index.ts; `st build` needs Node 18+ (npm install once, tsc --noEmit) and fetches extism-js 1.7.0 + binaryen 133 once
 - Terminal discovery: token `<data>/screeners/local_api_token`, port `<data>/config/general.yaml` (5055); `<data>` = `SPACE_TERMINAL_DIR` or OS data dir `Space Terminal`
 
 ## Code
@@ -23,15 +26,22 @@
 - `space_screener::oi::Collector::new().collect(now_ms)?` → open interest (one side, USD) of USDT perps (Hyperliquid USDC; no quote filtering needed) for binance, bybit, okx, bitget, gate, mexc, kucoin, hyperliquid; `Collector::only(&[..])` polls a subset of `oi::EXCHANGES` (rotate groups per call to keep calls short; then timer_ms < 60 s is fine); manifest `http` must spell out fapi.binance.com, api.bybit.com, app.okx.com, api.bitget.com, api.gateio.ws, contract.mexc.com, api-futures.kucoin.com, api.hyperliquid.xyz; Snapshot `is_complete()`/`summary()` ("binance 180/200"); items: canonical `symbol`, `native_symbol`
 - Binance OI is per symbol and fapi.binance.com is capped at 5 req/s by the terminal: N symbols ≈ N/5 s; the collector takes the top 200 by 24h volume (`set_binance_top_n(n)`, 1..=600, 600 = all)
 
+## TypeScript
+- `import { tickers, exchanges, http, httpBatch, kvGet, kvSet, replaceRows, emitRows, setStatus, alert, openMarket, openSpread, num, str, bool, params, signed, Series, mins } from "@space-terminal/screener"`; `export function init(input: InitInput)`, `export function on_timer(input: TimerInput)`; optional `on_click(input: ClickInput)`, `on_params`
+- src/index.ts exports only init/on_timer/on_click/on_params; top-level code runs at BUILD time (no host calls there); host calls are sync and throw HostError (`e.code`); fetch → http for manifest hosts, console → log; async exports allowed; Math.random is not crypto; ~10× slower than Rust
+
 ## Manifest
-- Required: `abi: 1`, `id` (^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$, not `install`, no con/prn/aux/nul/com1-9/lpt1-9 segment between dots), `version` (semver), `name {ru,en}`, `lang: rust`, `min_terminal: 0.104.70`
+- Required: `abi: 1`, `id` (^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$, not `install` or `sync`, no con/prn/aux/nul/com1-9/lpt1-9 segment between dots), `version` (semver), `name {ru,en}`, `lang: rust|ts`, `min_terminal: 0.104.70`
 - `http: [bare.host.names]` (every host called; no IP literals, no localhost), `timer_ms` (250..=3600000), `columns [{key, type, title{ru,en}, sort?: asc|desc, width?}]`, `params [{key, type, title, default, min?, max?, options?}]`, `limits {memory_mb ≤64, cpu_ms_per_call 50..=1000}`, `history?: [cluster, replay]`, `feeds: []` (v1)
 - Column types: text number integer percent usd price time duration countdown symbol exchange exchanges bool; param types: number integer bool text select
+- `install` and `sync` are reserved ids; duplicate hosts/columns/params are refused; column width 1..2000
+- Catalog (st publish): `description {ru|en}` ≤ 2000 chars, `categories` 1..3 of volume open-interest funding spread movers listings orderbook other, optional `source: https://…`; version without build metadata; limits manifest ≤ 64 KiB, wasm ≤ 10 MiB with code section ≤ 4 MiB, recording ≤ 4 MiB, ≤ 3 pending versions per screener
 
 ## Limits and pitfalls
 - 64 MB memory; cpu_ms_per_call (default 250, 50–1000) = plugin thread CPU for the whole call, wasm + host work for it (JSON, kv, rows), network wait free; past budget the next host call aborts; pure wasm loop cancelled after max(5×budget, 5 s) wall outside host functions; overrun/abort/runaway/600 s wall timeout = violation, 3 in last 10 calls → `limit`; CPU share ≤ 30 s per sliding 60 s (half a core, all calls incl. aborted) else `limit`; http timeout 1..10 s, body ≤8 MiB
 - One call including HTTP waits must finish within 600 s wall; Binance per-symbol round ≈ N/5 s
 - No std::time/fs/net/thread, no println (use info!), no wasm-bindgen deps (getrandom js, chrono wasmbind); extism-pdk logging/http imports are refused; start section and `_start`/`_initialize`/`__wasm_call_ctors`/`hs_init` exports are refused (forbidden_export)
+- WebAssembly 2.0 + tail calls + extended-const only (no GC, threads/shared memory, memory64, multi-memory, exceptions, relaxed SIMD, components); import functions only, with exact signatures (host functions (i64)->i64, Extism kernel as extism-pdk 1.4.1 declares it); ≤ 20 tables, ≤ 50 000 table elements; ≤ 10 000 functions, ≤ 256 KiB per function body, nesting ≤ 2 000, br_table ≤ 10 000 targets — `invalid_wasm: function N` = one huge function (giant match/inline table): move data to a static, split it
 - HTTP: https only, no redirects (3xx returned as is), no user info in URLs, timeout_ms 1000..=10000, body ≤ 8 MiB, http_batch bodies ≤ 48 MiB in total; rows ≤ 16 KiB each, ≤ 32 MiB in total
 - Exchange slugs lowercase (binance, bybit, okx, bitget, gate, mexc, kucoin, bingx, hyperliquid); markets spot|futures
 - Install st: `cargo install --git https://github.com/Space-Terminal/space-screener-sdk st` (st init then depends on the SDK by git); for SDK development `cargo install --path <sdk-checkout>/crates/st` (st init links to that checkout); `--sdk-path` overrides

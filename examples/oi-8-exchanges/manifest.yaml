@@ -6,6 +6,8 @@ description:
   ru: "OI бессрочных USDT-фьючерсов в долларах (одна сторона) и его изменение за 5 и 15 минут"
   en: "One-side open interest of USDT perpetuals in USD and its 5 and 15 minute change"
 lang: rust
+categories: [open-interest]
+source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/oi-8-exchanges
 min_terminal: 0.104.70
 http:
   - fapi.binance.com

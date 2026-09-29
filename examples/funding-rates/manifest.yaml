@@ -1,0 +1,30 @@
+abi: 1
+id: space.funding-rates
+version: 0.1.0
+name: {ru: "Фандинг: 6 бирж", en: "Funding rates: 6 exchanges"}
+description:
+  ru: "Текущая ставка фандинга бессрочных USDT-фьючерсов (USDC на Hyperliquid), её период, годовая ставка и время до выплаты на Binance, Bybit, Bitget, Gate, MEXC и Hyperliquid"
+  en: "Current funding rate of USDT perpetuals (USDC on Hyperliquid), its period, the annualized rate and the time to the next payment on Binance, Bybit, Bitget, Gate, MEXC and Hyperliquid"
+lang: rust
+categories: [funding]
+source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/funding-rates
+min_terminal: 0.104.70
+http:
+  - fapi.binance.com
+  - api.bybit.com
+  - api.bitget.com
+  - api.gateio.ws
+  - contract.mexc.com
+  - api.hyperliquid.xyz
+timer_ms: 60000
+columns:
+  - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
+  - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
+  - {key: rate, type: percent, title: {ru: "Ставка", en: "Rate"}}
+  - {key: apr, type: percent, title: {ru: "Годовых", en: "APR"}, sort: desc}
+  - {key: period, type: duration, title: {ru: "Период", en: "Period"}}
+  - {key: next, type: countdown, title: {ru: "До выплаты", en: "Next payment"}}
+params:
+  - {key: min_abs_apr, type: number, title: {ru: "Мин. |годовых|, %", en: "Min |APR|, %"}, default: 0, min: 0}
+  - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 1000, min: 1, max: 5000}
+limits: {cpu_ms_per_call: 500}
