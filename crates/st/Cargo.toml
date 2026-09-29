@@ -4,6 +4,7 @@ description = "Space Terminal screener CLI: init, build, dev, logs, rows"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "st"
