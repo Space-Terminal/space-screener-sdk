@@ -130,7 +130,13 @@ impl Harness {
             .with_memory_max(pages)
             .with_timeout(timeout)
             .disallow_all_hosts();
+        // One function at a time: compile memory scales with the function being compiled, so
+        // parallel compilation multiplies the peak by the core count (~2 GiB instead of
+        // ~250 MiB for a module at the limits of `space_screener_check::wasm`).
+        let mut config = wasmtime::Config::new();
+        config.parallel_compilation(false);
         let compiled = PluginBuilder::new(extism_manifest)
+            .with_wasmtime_config(config)
             .with_wasi(false)
             .with_functions(host::functions(&shared))
             .with_cache_disabled()
