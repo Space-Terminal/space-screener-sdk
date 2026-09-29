@@ -61,10 +61,70 @@ pub const HOST_FUNCTIONS: &[&str] = &[
 
 pub const REQUIRED_EXPORTS: &[&str] = &["init", "on_timer"];
 
-/// WebAssembly 2.0 — what Rust (wasm32-unknown-unknown) and the extism-js QuickJS build emit.
-/// Left out: GC (objects outside the linear-memory limit), threads, memory64, multi-memory,
-/// exceptions and components, which the terminal neither needs nor accounts for.
-pub const FEATURES: WasmFeatures = WasmFeatures::WASM2;
+/// WebAssembly 2.0 — what Rust (wasm32-unknown-unknown) and the extism-js QuickJS build emit —
+/// plus tail calls and extended constant expressions, which toolchains may turn on by default
+/// and which allocate nothing. Left out: GC (objects outside the linear-memory limit),
+/// threads, memory64, multi-memory, exceptions, relaxed SIMD and components, which the
+/// terminal neither needs nor accounts for.
+pub const FEATURES: WasmFeatures = WasmFeatures::WASM2
+    .union(WasmFeatures::TAIL_CALL)
+    .union(WasmFeatures::EXTENDED_CONST);
+
+const LEFT_OUT: &str =
+    "GC, threads and shared memory, memory64, multi-memory, exceptions, relaxed SIMD";
+
+/// Extism kernel signatures (extism 1.30 runtime exports and host functions, extism-pdk 1.4.1
+/// declarations); a mismatch fails at link time in the terminal.
+const ENV_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
+    ("alloc", &[ValType::I64], &[ValType::I64]),
+    ("free", &[ValType::I64], &[]),
+    ("length", &[ValType::I64], &[ValType::I64]),
+    ("length_unsafe", &[ValType::I64], &[ValType::I64]),
+    ("load_u8", &[ValType::I64], &[ValType::I32]),
+    ("load_u64", &[ValType::I64], &[ValType::I64]),
+    ("store_u8", &[ValType::I64, ValType::I32], &[]),
+    ("store_u64", &[ValType::I64, ValType::I64], &[]),
+    ("input_length", &[], &[ValType::I64]),
+    ("input_load_u8", &[ValType::I64], &[ValType::I32]),
+    ("input_load_u64", &[ValType::I64], &[ValType::I64]),
+    ("output_set", &[ValType::I64, ValType::I64], &[]),
+    ("error_set", &[ValType::I64], &[]),
+    ("config_get", &[ValType::I64], &[ValType::I64]),
+    ("var_get", &[ValType::I64], &[ValType::I64]),
+    ("var_set", &[ValType::I64, ValType::I64], &[]),
+];
+
+const HOST_SIGNATURE: (&[ValType], &[ValType]) = (&[ValType::I64], &[ValType::I64]);
+
+fn expected_signature(
+    module: &str,
+    name: &str,
+) -> Option<(&'static [ValType], &'static [ValType])> {
+    match module {
+        ENV_MODULE => ENV_SIGNATURES
+            .iter()
+            .find(|(known, ..)| *known == name)
+            .map(|(_, params, results)| (*params, *results)),
+        USER_MODULE => is_host_function(name).then_some(HOST_SIGNATURE),
+        _ => None,
+    }
+}
+
+fn wat_signature((params, results): (&[ValType], &[ValType])) -> String {
+    let list = |types: &[ValType]| {
+        types
+            .iter()
+            .map(|ty| ty.to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    match (params.is_empty(), results.is_empty()) {
+        (true, true) => "(func)".to_string(),
+        (true, false) => format!("(func (result {}))", list(results)),
+        (false, true) => format!("(func (param {}))", list(params)),
+        (false, false) => format!("(func (param {}) (result {}))", list(params), list(results)),
+    }
+}
 
 /// Tables live outside the linear memory, so the memory limit does not cover them. Real
 /// modules have one or two (Rust: 1 table of ~100 functions, QuickJS: 2 tables, ~960 elements
@@ -87,6 +147,8 @@ pub struct WasmInfo {
     pub imports: Vec<(String, String)>,
     /// Function exports only.
     pub exports: Vec<String>,
+    /// Bytes of the code section (function bodies): compile time and memory scale with it.
+    pub code_bytes: usize,
 }
 
 pub fn is_host_function(name: &str) -> bool {
@@ -115,12 +177,20 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
         );
         return Err(r);
     }
+    if let Err(e) = Validator::new_with_features(WasmFeatures::all()).validate_all(bytes) {
+        r.error(
+            Code::InvalidWasm,
+            "",
+            format!("module does not validate: {e}"),
+        );
+        return Err(r);
+    }
     if let Err(e) = Validator::new_with_features(FEATURES).validate_all(bytes) {
         r.error(
             Code::InvalidWasm,
             "",
             format!(
-                "module does not validate with WebAssembly 2.0 features (no GC, threads, memory64, multi-memory or exceptions): {e}"
+                "the module uses a WebAssembly feature screeners may not use ({LEFT_OUT}): {e}"
             ),
         );
         return Err(r);
@@ -188,18 +258,22 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
                     }
                     match import.ty {
                         TypeRef::Func(index) => {
-                            let host_signature = func_types
-                                .get(index as usize)
-                                .and_then(Option::as_ref)
-                                .is_some_and(|(params, results)| {
-                                    params.as_slice() == [ValType::I64]
-                                        && results.as_slice() == [ValType::I64]
-                                });
-                            if allowed && import.module == USER_MODULE && !host_signature {
+                            let expected = expected_signature(import.module, import.name);
+                            let declared = func_types.get(index as usize).and_then(Option::as_ref);
+                            if let Some(expected) = expected
+                                && declared.is_none_or(|(params, results)| {
+                                    (params.as_slice(), results.as_slice()) != expected
+                                })
+                            {
                                 r.error(
                                     Code::ForbiddenImport,
                                     &path,
-                                    "host functions take and return one i64 (a memory offset): (func (param i64) (result i64))",
+                                    format!(
+                                        "{}::{} must be declared as {}",
+                                        import.module,
+                                        import.name,
+                                        wat_signature(expected)
+                                    ),
                                 );
                             }
                         }
@@ -234,6 +308,7 @@ pub fn inspect(bytes: &[u8]) -> Result<WasmInfo, Report> {
                     }
                 }
             }
+            Payload::CodeSectionStart { range, .. } => info.code_bytes = range.len(),
             Payload::CodeSectionEntry(body) => {
                 let mut operators = match body.get_operators_reader() {
                     Ok(operators) => operators,
@@ -587,13 +662,66 @@ mod tests {
         let problems = report(&format!(
             r#"(import "extism:host/user" "http" (func (param i32) (result i32))) {ENTRY}"#
         ));
-        assert!(problems.contains("take and return one i64"), "{problems}");
+        assert!(
+            problems.contains(
+                "extism:host/user::http must be declared as (func (param i64) (result i64))"
+            ),
+            "{problems}"
+        );
         assert!(
             inspect(&module(&format!(
                 r#"(import "extism:host/user" "http" (func (param i64) (result i64))) {ENTRY}"#
             )))
             .is_ok()
         );
+    }
+
+    #[test]
+    fn kernel_imports_must_have_extism_signatures() {
+        let problems = report(&format!(
+            r#"(import "extism:host/env" "alloc" (func (param i32) (result i32))) {ENTRY}"#
+        ));
+        assert!(
+            problems.contains(
+                "extism:host/env::alloc must be declared as (func (param i64) (result i64))"
+            ),
+            "{problems}"
+        );
+        assert!(
+            inspect(&module(&format!(
+                r#"(import "extism:host/env" "store_u8" (func (param i64 i32)))
+                   (import "extism:host/env" "input_length" (func (result i64)))
+                   {ENTRY}"#
+            )))
+            .is_ok()
+        );
+        for name in ENV_IMPORTS {
+            assert!(expected_signature(ENV_MODULE, name).is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn tail_calls_and_extended_consts_are_allowed() {
+        assert!(
+            inspect(&module(&format!(
+                r#"(global i32 (i32.add (i32.const 1) (i32.const 2)))
+                   (func $zero (result i32) i32.const 0)
+                   (func (export "tail") (result i32) (return_call $zero))
+                   {ENTRY}"#
+            )))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn broken_bytes_are_not_blamed_on_features() {
+        for bytes in [&b"not wasm"[..], &b""[..], &b"\0asm\x01\0\0\0\x01"[..]] {
+            let problems = inspect(bytes).unwrap_err().to_string();
+            assert!(problems.contains("does not validate"), "{problems}");
+            assert!(!problems.contains("may not use"), "{problems}");
+        }
+        let shared = report(&format!("(memory 1 1 shared) {ENTRY}"));
+        assert!(shared.contains("may not use (GC, threads"), "{shared}");
     }
 
     #[test]
