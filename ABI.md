@@ -1,8 +1,10 @@
 # Space Terminal screener ABI v1
 
 This is the wire contract between a screener plugin and Space Terminal. The Rust PDK
-(`crates/space-screener`) implements the plugin side; you only need this file if you write a
-PDK for another language or debug the raw protocol.
+(`crates/space-screener`) and the TypeScript PDK (`crates/st/ts/pdk`, written into TypeScript projects
+by `st init --lang ts`) implement the plugin side; you only need this file if you write a PDK for
+another language or debug the raw protocol. The rules below are code in `crates/space-screener-check`:
+the terminal, `st` and the Space Market registry all check plugins with it.
 
 ## Transport
 
@@ -26,6 +28,18 @@ The terminal rejects a module (`forbidden_import`) that imports anything outside
 Extism's own `http_request`, `log_*`, `get_log_level` and any `wasi_*` import are refused. With the
 Rust PDK use `extism-pdk = { version = "1.4.1", default-features = false }` (the PDK crate already does).
 
+Only functions may be imported (no memories, tables, globals or tags), and every host function is
+declared `(i64) -> i64`: an Extism memory offset in, an offset out.
+
+### Module shape
+
+- The module validates with **WebAssembly 2.0** features only: GC types, threads, memory64,
+  multi-memory, exceptions, tail calls and components are refused (`invalid_wasm`).
+- At most 20 tables holding at most 50 000 elements in total — tables live outside `limits.memory_mb`.
+  A table without a declared maximum counts with its initial size and must never be grown with
+  `table.grow`.
+- `screener.wasm` is at most 10 MiB.
+
 ### Refused exports
 
 Nothing may run at instantiation, outside the terminal's call limits: a module with a start section or
@@ -41,6 +55,8 @@ version: 0.1.0                          # required, semver
 name: {ru: "Открытый интерес", en: "Open interest"}   # required, at least one language
 description: {ru: "...", en: "..."}     # optional
 lang: rust                              # required: rust | ts
+categories: [open-interest]             # catalog only, see below
+source: https://github.com/me/oi        # catalog only, optional
 min_terminal: 0.104.70                  # required, semver; an older terminal refuses: terminal_too_old
 http: [fapi.binance.com, api.bybit.com] # exact host names http() may call, https only
 history: [cluster, replay]              # optional, cloud history access
@@ -56,11 +72,24 @@ limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional; cpu_ms_per_ca
 ```
 
 - `id` matches `^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$` (3..64 chars, starts and ends with a letter or digit),
-  is not `install` (a local API route), and no segment between dots is a Windows device name: `con`, `prn`, `aux`, `nul`, `com1`..`com9`,
+  is not `install` or `sync` (local API routes), and no segment between dots is a Windows device name: `con`, `prn`, `aux`, `nul`, `com1`..`com9`,
   `lpt1`..`lpt9` (`ivan.con` is refused, `ivan.console` is fine) — the id is a folder name on every OS.
-- `http` hosts are bare DNS names; IP literals and `localhost` are refused.
+- `http` hosts are bare DNS names; IP literals and `localhost` are refused. A host, a column key or a
+  parameter key listed twice is refused.
+- `width` of a column is 1..=2000 px.
 - The first column with `sort` is the default sort of the pane.
 - `pricing`, `hosting`, `alerts` and other fields are ignored in v1.
+
+### Catalog fields
+
+The terminal ignores them; the Space Market registry requires them on publish (`st validate` says
+whether the manifest is ready, `st publish` refuses it otherwise):
+
+- `categories`: 1..=3 of `volume`, `open-interest`, `funding`, `spread`, `movers`, `listings`,
+  `orderbook`, `other`.
+- `description`: required in `ru` or `en`, each at most 2000 characters (it is the catalog card text).
+- `source`: optional `https://` link to the source code (host rules as for `http`, no user info).
+- `version`: no build metadata (`1.2.0+b1` is refused — it does not order versions).
 
 ### Column types
 
@@ -104,6 +133,19 @@ Calls of one plugin never overlap: a click routed to `on_click` waits while `on_
 `on_click` only when the click needs custom logic, and keep `on_timer` rounds short; without the export
 the terminal opens the row's market at once. The Rust PDK exports `on_click` only with
 `export_screener!(T, on_click)`. A panic in the PDK is logged (message and location) before the trap.
+
+### TypeScript (`lang: ts`)
+
+`st build` bundles `src/index.ts` with esbuild and compiles it with extism-js 1.7.0 (QuickJS). js-pdk
+imports WASI and Extism's logging/HTTP; `st` links stubs for them into the module (clock → `now_ms`,
+random → a PRNG seeded from `now_ms`, no files or environment) and keeps only `memory` and the entry
+points as exports, so the result passes the rules above like a Rust module. Consequences:
+
+- `src/index.ts` exports only `init`, `on_timer`, `on_click`, `on_params` (the first two required).
+- The top level of every module runs **once, at build time**, and is snapshotted: calling a host
+  function there fails the build, and `Date.now()` there returns the build time.
+- `Math.random` and `crypto.getRandomValues` are not cryptographically secure.
+- ES2020; QuickJS is roughly ten times slower than Rust, and a module is about 2.4 MB.
 
 ## Host functions
 
@@ -235,12 +277,62 @@ Errors are `{ok: false, error: <code>, message}`; a missing or wrong token gives
 
 | Route | Body / query | Response |
 |---|---|---|
-| `GET /api/v1/screeners` | — | `{ok, screeners: [{id, version, name: {ru, en}, dev, status, status_text?, rows, panes}]}`; status: `running`, `stopped`, `error`, `limit` |
+| `GET /api/v1/screeners` | — | `{ok, screeners: [{id, version, name: {ru, en}, dev, source, status, status_text?, rows, panes}]}`; `source`: `dev` (installed by `st`) or `catalog` (from the Space Market library); status: `running`, `stopped`, `error`, `limit` |
 | `POST /api/v1/screeners/install` | `{manifest: "<yaml text>", wasm_b64, open_pane?: bool}` (≤ 32 MiB) | `{ok, id, version, running, pane: "exists"\|"opening"\|"none"}`; 400 `invalid_manifest`, `invalid_wasm`, `forbidden_import`, `forbidden_export`, `unsupported_feed`, `terminal_too_old`, `too_large` |
 | `POST /api/v1/screeners/{id}/reload` | — | `{ok, running}` |
 | `DELETE /api/v1/screeners/{id}` | — | `{ok}` |
 | `GET /api/v1/screeners/{id}/logs` | `?since=<seq>` (pass the previous `next`; 0 = from the start) | `{ok, lines: [{seq, ts_ms, level, msg}], next}` |
 | `GET /api/v1/screeners/{id}/rows` | — | `{ok, version, status, status_text?, rows: [Row]}` |
+| `POST /api/v1/screeners/{id}/record` | `{seconds}` (≤ 600, default 60) | `{ok, state: "recording", remaining_ms}`; restarts the plugin and records its run from `init`; 409 `not_running` (no pane shows it) |
+| `GET /api/v1/screeners/{id}/record` | — | `{ok, state: "recording"\|"done"\|"none", remaining_ms?, recording?}`; `recording` (below) once `done` |
 
 Reinstalling an id restarts its running instance. With `open_pane: true` and no pane showing the
 screener, the terminal opens a new tab with it. Unknown ids give 404 `not_found`.
+
+`POST /api/v1/screeners/sync` (optional `?open=1`) needs no token and answers browsers (CORS): the
+Space Market site calls it after "Add" so that a terminal with a linked account syncs its library at
+once instead of within a minute. It carries no ids or files; with `open=1` the terminal opens a pane for
+plugins that this sync installs for the first time.
+
+## Recordings (`st record`, `st test`)
+
+A recording is one run of a plugin in the terminal: the calls the terminal made and the replies of the
+data host functions. `st test` replays it headless (`crates/space-screener-harness`) on the recorded
+clock and compares rows, alerts, status and clicks with `<recording>.expected.json`.
+
+```json
+{"v": 1, "id": "me.oi", "version": "0.1.0", "terminal": "0.104.71", "lang": "en",
+ "params": {"min_oi": 5000000}, "kv": {"seen": ["BTCUSDT"]}, "started_ms": 1790700000000,
+ "truncated": false,
+ "events": [
+   {"kind": "init",  "t_ms": 1790700000000, "input": {"params": {…}, "terminal": "0.104.71", "lang": "en", "now_ms": 1790700000000}},
+   {"kind": "call",  "t_ms": 1790700000012, "fn": "tickers", "input": {"exchange": "binance", "market": "futures"}, "output": {"ok": {…}}},
+   {"kind": "timer", "t_ms": 1790700060000, "input": {"now_ms": 1790700060000}},
+   {"kind": "click", "t_ms": 1790700061000, "input": {"row": {"key": "BTCUSDT"}, "column": null, "button": "left", "modifiers": {…}}}]}
+```
+
+- Recorded functions: `http`, `http_batch`, `tickers`, `symbols`, `exchanges`, `history_cluster`,
+  `history_replay`, `now_ms`. Local ones (kv, rows, alerts, status, log) run for real on replay.
+- Replay answers a call with the first unused recorded call of the same function and the same JSON
+  input; a call not in the recording gets `{"err": {"code": "transport", "message": "not recorded"}}`.
+- `kv` is the plugin's store at `init`; `truncated` means the recording hit the terminal's 32 MiB cap.
+
+## Publishing to the Space Market catalog
+
+`st publish` sends `POST /api/v1/registry/publish` with `Authorization: Bearer stp_…` (a publish token
+from the author page of the store) and `{manifest, wasm_b64, recording?}`:
+
+- The registry checks the manifest, the module and the catalog fields with the rules above, then runs
+  the plugin headless (`init` and three `on_timer`, 20 s of wall time at most) on the recording, or on a
+  small offline data set without network when there is none. The report (verdict ok/warn/fail, issues,
+  sample rows, log lines ≤ 4096 bytes each, ≤ 256 KiB in total) goes to the moderator.
+- Limits: manifest ≤ 64 KiB, module ≤ 10 MiB, recording ≤ 4 MiB; at most 3 versions of one screener
+  and 10 of one author waiting for moderation (`too_many_pending`).
+- An id belongs to the first author who publishes it (`id_taken`); versions only grow (`version_exists`,
+  `version_not_greater`).
+- Every version waits for a moderator. An approved version is signed with the registry key
+  (Ed25519); terminals install only signed versions and check the signature and the SHA-256 of the
+  files before every load.
+- A terminal installs the version its account chose on the site, or else the newest approved stable
+  version (a pre-release only when pinned or when there is no stable one). A revoked version or
+  screener is removed from terminals at the next library sync.
