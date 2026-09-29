@@ -24,8 +24,14 @@ const ALERTS_PER_MINUTE: usize = 6;
 const MAX_ALERT_TITLE: usize = 200;
 const MAX_ALERT_BODY: usize = 1000;
 const MAX_STATUS_TEXT: usize = 128;
-const MAX_LOG_LINES: usize = 5000;
+const MAX_LOG_LINES: usize = 1000;
+/// Bytes of one log line, as in the terminal.
+const MAX_LOG_LINE: usize = 4096;
 const MAX_WARNINGS: usize = 100;
+/// Characters of one warning: they quote author-controlled keys and hosts.
+const MAX_WARNING: usize = 300;
+const MAX_UNDECLARED_HOSTS: usize = 20;
+const MAX_ALERTS: usize = 1000;
 
 /// CPU of the calling thread; `None` when the OS does not report it (then wall time counts).
 fn thread_cpu() -> Option<Duration> {
@@ -97,16 +103,25 @@ impl Rows {
                 self.bytes -= old.weight;
             }
         }
-        while self.rows.len() > MAX_ROWS || self.bytes > MAX_BUFFER_BYTES {
-            let Some(oldest) = self
-                .rows
-                .iter()
-                .min_by_key(|(_, stored)| stored.seq)
-                .map(|(key, _)| key.clone())
-            else {
+        self.evict_over_caps();
+    }
+
+    /// Drops the rows updated longest ago; sorted once, so a huge emit stays O(n log n).
+    fn evict_over_caps(&mut self) {
+        if self.rows.len() <= MAX_ROWS && self.bytes <= MAX_BUFFER_BYTES {
+            return;
+        }
+        let mut by_age: Vec<(u64, String)> = self
+            .rows
+            .iter()
+            .map(|(key, stored)| (stored.seq, key.clone()))
+            .collect();
+        by_age.sort_unstable();
+        for (_, key) in by_age {
+            if self.rows.len() <= MAX_ROWS && self.bytes <= MAX_BUFFER_BYTES {
                 break;
-            };
-            if let Some(old) = self.rows.remove(&oldest) {
+            }
+            if let Some(old) = self.rows.remove(&key) {
                 self.bytes -= old.weight;
             }
         }
@@ -187,18 +202,26 @@ impl State {
 
     pub fn warn(&mut self, message: impl Into<String>) {
         if self.warnings.len() < MAX_WARNINGS {
-            self.warnings.insert(message.into());
+            self.warnings.insert(truncate(message.into(), MAX_WARNING));
         }
     }
 
     pub fn host_log(&mut self, level: &str, msg: impl Into<String>) {
+        let mut msg = msg.into();
+        if msg.len() > MAX_LOG_LINE {
+            let cut = (0..=MAX_LOG_LINE)
+                .rev()
+                .find(|&i| msg.is_char_boundary(i))
+                .unwrap_or(0);
+            msg.truncate(cut);
+        }
         if self.logs.len() == MAX_LOG_LINES {
             self.logs.pop_front();
         }
         self.logs.push_back(LogLine {
             t_ms: self.now_ms,
-            level: level.to_string(),
-            msg: msg.into(),
+            level: truncate(level.to_string(), 16),
+            msg,
         });
     }
 
@@ -340,8 +363,12 @@ impl State {
         if self.manifest.http.iter().any(|allowed| allowed == host) {
             return true;
         }
-        if !self.stats.undeclared_hosts.iter().any(|seen| seen == host) {
-            self.stats.undeclared_hosts.push(host.to_string());
+        if self.stats.undeclared_hosts.len() < MAX_UNDECLARED_HOSTS
+            && !self.stats.undeclared_hosts.iter().any(|seen| seen == host)
+        {
+            self.stats
+                .undeclared_hosts
+                .push(truncate(host.to_string(), 253));
             self.warn(format!(
                 "http to {host}, which manifest.yaml does not declare"
             ));
@@ -359,7 +386,17 @@ impl State {
         self.data(name, input)
     }
 
-    fn emit_rows(&mut self, request: EmitRows) -> Result<Value, Value> {
+    fn emit_rows(&mut self, mut request: EmitRows) -> Result<Value, Value> {
+        // Rows past the cap would be evicted right away as the oldest; skip their work.
+        if request.rows.len() > MAX_ROWS {
+            let extra = request.rows.len() - MAX_ROWS;
+            request.rows.drain(..extra);
+            self.host_log(
+                "warn",
+                format!("emit_rows: {extra} rows over the {MAX_ROWS}-row cap were dropped"),
+            );
+            self.warn(format!("one emit_rows call sent more than {MAX_ROWS} rows"));
+        }
         let mut prepared = Vec::with_capacity(request.rows.len());
         let mut dropped = 0usize;
         for input in request.rows {
@@ -475,9 +512,12 @@ impl State {
             return Value::Null;
         }
         self.alert_times.push_back(now);
+        if self.alerts.len() == MAX_ALERTS {
+            self.alerts.remove(0);
+        }
         self.alerts.push(Alert {
             t_ms: now,
-            level: alert.level,
+            level: truncate(alert.level, 16),
             title: truncate(alert.title, MAX_ALERT_TITLE),
             body: truncate(alert.body, MAX_ALERT_BODY),
             row_key: alert.row_key,
@@ -792,6 +832,47 @@ mod tests {
             Some("not_in_click")
         );
         assert_eq!(s.output().intents.len(), 1);
+    }
+
+    #[test]
+    fn huge_emits_stay_fast_and_keep_the_newest_rows() {
+        let mut s = state();
+        let started = std::time::Instant::now();
+        let rows: Vec<Value> = (0..120_000)
+            .map(|i| json!({"key": format!("k{i}"), "cells": {"oi": i}}))
+            .collect();
+        assert_eq!(
+            s.call("emit_rows", &json!({ "rows": rows })),
+            json!({"ok": null})
+        );
+        let out = s.output();
+        assert_eq!(out.rows.len(), MAX_ROWS);
+        assert!(out.rows.iter().any(|row| row.key == "k119999"));
+        assert!(!out.rows.iter().any(|row| row.key == "k0"));
+        for batch in 0..30 {
+            let rows: Vec<Value> = (0..1000)
+                .map(|i| json!({"key": format!("b{batch}-{i}"), "cells": {"oi": i}}))
+                .collect();
+            s.call("emit_rows", &json!({ "rows": rows }));
+        }
+        let out = s.output();
+        assert_eq!(out.rows.len(), MAX_ROWS);
+        assert!(out.rows.iter().all(|row| row.key.starts_with('b')));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn log_lines_are_cut_at_a_char_boundary() {
+        let mut s = state();
+        let long = "ж".repeat(MAX_LOG_LINE);
+        s.call("log", &json!({"level": "info", "msg": long}));
+        let line = &s.output().logs[0].msg;
+        assert!(line.len() <= MAX_LOG_LINE && line.len() > MAX_LOG_LINE - 4);
+        assert!(line.chars().all(|c| c == 'ж'));
     }
 
     #[test]

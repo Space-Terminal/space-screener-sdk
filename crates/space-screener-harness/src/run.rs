@@ -16,8 +16,12 @@ pub const TRIAL_EPOCH_MS: i64 = 1_767_225_600_000;
 pub const TRIAL_TIMERS: usize = 3;
 pub const TRIAL_SAMPLE_ROWS: usize = 20;
 pub const TRIAL_LOG_LINES: usize = 200;
-/// Wall-clock budget of a whole trial run; the remaining timers are skipped after it.
+/// Wall-clock budget of a whole trial run, compilation included: a call still running at it
+/// is cancelled and later calls do not start.
 pub const TRIAL_WALL_LIMIT: Duration = Duration::from_secs(20);
+/// Serialized size cap of a [`TrialReport`]: rows, logs and issues all come from the author.
+pub const MAX_REPORT_BYTES: usize = 256 * 1024;
+const MAX_ISSUE: usize = 500;
 
 fn lang_of(recording: &Recording) -> Lang {
     if recording.lang == "ru" {
@@ -75,7 +79,10 @@ pub fn replay(
     if let Some(last) = recording.events.last() {
         harness.set_now(last.t_ms())?;
     }
-    harness.output()
+    let mut output = harness.output()?;
+    let skip = output.logs.len().saturating_sub(TRIAL_LOG_LINES);
+    output.logs.drain(..skip);
+    Ok(output)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,14 +123,51 @@ impl TrialReport {
 /// `init` and up to three `on_timer` calls with the terminal's limits. Data comes from the
 /// recording when given, else from the offline set (no network). A trap or a limit in `init`
 /// fails the trial; anything else is a warning for the moderator.
+///
+/// Takes at most [`TRIAL_WALL_LIMIT`] of wall time plus the compilation of the module (bounded
+/// by its 10 MiB size), and the report serializes to at most [`MAX_REPORT_BYTES`].
 pub fn trial(manifest: &Manifest, wasm: &[u8], recording: Option<&Recording>) -> TrialReport {
-    match run_trial(manifest, wasm, recording) {
+    let mut report = match run_trial(manifest, wasm, recording) {
         Ok(report) => report,
         Err(HarnessError::Invalid(report)) => TrialReport {
             issues: report.errors.iter().map(ToString::to_string).collect(),
             ..TrialReport::fail(String::new())
         },
         Err(error) => TrialReport::fail(error.to_string()),
+    };
+    fit(&mut report);
+    report
+}
+
+fn json_len<T: Serialize>(value: &T) -> usize {
+    serde_json::to_vec(value).map_or(0, |bytes| bytes.len())
+}
+
+/// Shortens issues, then drops the oldest log lines and the last sample rows until the report
+/// fits [`MAX_REPORT_BYTES`].
+fn fit(report: &mut TrialReport) {
+    for issue in &mut report.issues {
+        if let Some((cut, _)) = issue.char_indices().nth(MAX_ISSUE) {
+            issue.truncate(cut);
+        }
+    }
+    let mut size = json_len(report);
+    let mut trimmed = false;
+    while size > MAX_REPORT_BYTES && !report.logs.is_empty() {
+        size = size.saturating_sub(json_len(&report.logs.remove(0)) + 1);
+        trimmed = true;
+    }
+    while size > MAX_REPORT_BYTES
+        && let Some(row) = report.sample_rows.pop()
+    {
+        size = size.saturating_sub(json_len(&row) + 1);
+        trimmed = true;
+    }
+    if trimmed {
+        report.issues.push(format!(
+            "the report was trimmed to {} KiB",
+            MAX_REPORT_BYTES / 1024
+        ));
     }
 }
 
@@ -132,7 +176,7 @@ fn run_trial(
     wasm: &[u8],
     recording: Option<&Recording>,
 ) -> Result<TrialReport, HarnessError> {
-    let started = Instant::now();
+    let deadline = Instant::now() + TRIAL_WALL_LIMIT;
     let mut issues = Vec::new();
     let mut verdict = Verdict::Ok;
     let mut harness = match recording {
@@ -193,6 +237,7 @@ fn run_trial(
         }
     };
 
+    harness.set_deadline(Some(deadline));
     let init = harness.init_with(&init_input, start_ms)?;
     match &init {
         CallOutcome::Done { .. } => {}
@@ -204,7 +249,10 @@ fn run_trial(
             verdict = Verdict::Fail;
             issues.push("init is not exported".to_string());
         }
-        CallOutcome::Trapped { .. } | CallOutcome::Cut { .. } | CallOutcome::TimedOut { .. } => {
+        CallOutcome::Trapped { .. }
+        | CallOutcome::Cut { .. }
+        | CallOutcome::TimedOut { .. }
+        | CallOutcome::Deadline => {
             verdict = Verdict::Fail;
             issues.push(format!("init {}", init.describe()));
         }
@@ -212,14 +260,6 @@ fn run_trial(
 
     if verdict != Verdict::Fail {
         for (t_ms, input) in timers {
-            if started.elapsed() > TRIAL_WALL_LIMIT {
-                issues.push(format!(
-                    "stopped after {} s of wall time",
-                    TRIAL_WALL_LIMIT.as_secs()
-                ));
-                verdict = Verdict::Warn;
-                break;
-            }
             let outcome = harness.timer_with(&input, t_ms)?;
             if !outcome.is_ok() {
                 verdict = Verdict::Warn;

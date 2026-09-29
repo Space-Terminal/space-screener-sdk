@@ -15,5 +15,5 @@ pub mod source;
 
 pub use harness::{CallOutcome, Harness, HarnessError, INIT_BUDGET};
 pub use output::{Alert, Intent, LogLine, Output, Row, Stats, Status};
-pub use run::{TrialReport, Verdict, replay, trial};
+pub use run::{MAX_REPORT_BYTES, TRIAL_WALL_LIMIT, TrialReport, Verdict, replay, trial};
 pub use source::{Offline, Replay, Source};

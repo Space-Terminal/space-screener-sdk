@@ -19,6 +19,7 @@ pub const MAX_MEMORY_MB: u32 = 64;
 pub const MIN_CPU_MS: u64 = 50;
 pub const DEFAULT_CPU_MS: u64 = 250;
 pub const MAX_CPU_MS: u64 = 1000;
+pub const MAX_COLUMN_WIDTH: f32 = 2000.0;
 
 /// Ids that collide with static routes of the terminal's local API
 /// (`/api/v1/screeners/install`, `/api/v1/screeners/sync`).
@@ -491,6 +492,11 @@ fn check(yaml: &str, terminal: Option<&semver::Version>) -> (Option<Manifest>, R
     let mut http = Vec::with_capacity(raw.http.len());
     for (i, host) in raw.http.iter().enumerate() {
         match normalize_host(host) {
+            Some(host) if http.contains(&host) => r.error(
+                Code::InvalidManifest,
+                format!("http[{i}]"),
+                format!("`{host}` is declared twice"),
+            ),
             Some(host) => http.push(host),
             None => r.error(
                 Code::InvalidManifest,
@@ -552,6 +558,15 @@ fn check(yaml: &str, terminal: Option<&semver::Version>) -> (Option<Manifest>, R
         );
     }
 
+    if terminal.is_some() {
+        // The old host stopped at the first problem in this order: a newer terminal may accept
+        // feeds and anything else this one reports.
+        r.errors.sort_by_key(|issue| match issue.code {
+            Code::TerminalTooOld => 0,
+            Code::UnsupportedFeed => 1,
+            _ => 2,
+        });
+    }
     if !r.is_ok() {
         return (None, r);
     }
@@ -638,14 +653,15 @@ fn check_columns(raw: Vec<RawColumn>, r: &mut Report) -> Vec<Column> {
                 None
             }
         };
-        if let Some(width) = c.width
-            && !(width.is_finite() && width > 0.0)
+        let width = c.width.map(|w| w as f32);
+        if let Some(width) = width
+            && !(width.is_finite() && width > 0.0 && width <= MAX_COLUMN_WIDTH)
         {
             r.error(
                 Code::InvalidManifest,
                 &path,
                 format!(
-                    "column `{}` width must be a positive number of pixels",
+                    "column `{}` width must be 1..={MAX_COLUMN_WIDTH} pixels",
                     c.key
                 ),
             );
@@ -660,7 +676,7 @@ fn check_columns(raw: Vec<RawColumn>, r: &mut Report) -> Vec<Column> {
                 kind,
                 title,
                 sort,
-                width: c.width.map(|w| w as f32),
+                width,
             });
         }
     }
@@ -981,13 +997,45 @@ limits: {memory_mb: 128}
 
     #[test]
     fn column_width_must_be_positive() {
-        for (width, ok) in [("0", false), ("-5", false), (".nan", false), ("120", true)] {
+        for (width, ok) in [
+            ("0", false),
+            ("-5", false),
+            (".nan", false),
+            ("1e-50", false),
+            ("1e39", false),
+            ("2001", false),
+            ("120", true),
+            ("2000", true),
+        ] {
             let yaml = host_manifest("").replace(
                 "{key: oi, type: usd, sort: desc}",
                 &format!("{{key: oi, type: usd, sort: desc, width: {width}}}"),
             );
             assert_eq!(is_valid(&yaml), ok, "width {width}");
         }
+    }
+
+    #[test]
+    fn unsupported_feed_comes_before_other_problems_for_the_terminal() {
+        let yaml = host_manifest("feeds: [{kind: trades}]\ntimer_ms: 100\n");
+        assert_eq!(first_code(&yaml), "unsupported_feed");
+        let report = Manifest::parse(&yaml).unwrap_err();
+        assert_eq!(
+            report.errors[0].code,
+            Code::InvalidManifest,
+            "document order without a terminal"
+        );
+    }
+
+    #[test]
+    fn http_hosts_are_unique_after_normalization() {
+        let yaml = host_manifest("").replace(
+            "http: [fapi.binance.com]",
+            "http: [fapi.binance.com, \" FAPI.Binance.com \"]",
+        );
+        let report = Manifest::parse(&yaml).unwrap_err();
+        assert_eq!(report.errors[0].path, "http[1]");
+        assert!(report.errors[0].message.contains("declared twice"));
     }
 
     #[test]
