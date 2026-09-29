@@ -36,7 +36,7 @@ enum Command {
         /// Screener id, e.g. author.oi-screener (default: local.<folder>)
         #[arg(long)]
         id: Option<String>,
-        /// Path to the space-screener crate (default: the SDK this st was built from)
+        /// Path to the space-screener crate (default: the local SDK checkout st was built from, else git)
         #[arg(long)]
         sdk_path: Option<PathBuf>,
     },

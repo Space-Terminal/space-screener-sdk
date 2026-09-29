@@ -16,7 +16,7 @@ history) and shows their rows as a table pane; a click on a row opens the market
 ## Quick start
 
 ```sh
-cargo install --path crates/st      # from this checkout; st init links new projects to it
+cargo install --git https://github.com/Space-Terminal/space-screener-sdk st
 st init my-screener --id me.my-screener
 cd my-screener
 st build          # installs the wasm32-unknown-unknown target on first use
@@ -27,3 +27,12 @@ st logs -f        # plugin log
 
 `st` finds the terminal through `<data>/screeners/local_api_token` and `<data>/config/general.yaml`,
 where `<data>` is `SPACE_TERMINAL_DIR` or the `Space Terminal` folder in the OS data directory.
+
+## Working on the SDK
+
+`cargo install --path crates/st` from a checkout builds `st` that links new projects (`st init`) to that
+checkout instead of the git repository; `st init --sdk-path <path>` picks any other copy.
+
+## License
+
+A license will be added.

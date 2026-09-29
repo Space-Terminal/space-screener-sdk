@@ -12,15 +12,14 @@ and HTTP, and hands rows back. The full wire contract is `ABI.md` in the SDK rep
 
 ## Workflow
 
-1. **Tooling.** `st --version`. If missing, install it from a local SDK checkout:
-   `cargo install --path <sdk-checkout>/crates/st`. `st` built this way remembers where the SDK is, so
-   `st init` writes a path dependency on that checkout — this is the main scenario. Once the SDK repo is
-   published, `cargo install --git https://github.com/EvgeniiKobelev/space-screener-sdk st` will work too
-   (the URL does not work before publication). `st build` installs the `wasm32-unknown-unknown` target
-   through rustup on first use.
+1. **Tooling.** `st --version`. If missing:
+   `cargo install --git https://github.com/Space-Terminal/space-screener-sdk st`. Projects created by this
+   `st` depend on the SDK by git. When developing the SDK itself, install from your checkout instead —
+   `cargo install --path <sdk-checkout>/crates/st` — and `st init` links new projects to that checkout.
+   `st build` installs the `wasm32-unknown-unknown` target through rustup on first use.
 2. **Scaffold.** `st init <folder> --id <author>.<name>` → `Cargo.toml`, `manifest.yaml`,
-   `src/lib.rs` (a working "top movers" starter). Work inside that folder. `--sdk-path <sdk>/crates/space-screener`
-   points at another checkout.
+   `src/lib.rs` (a working "top movers" starter). Work inside that folder.
+   `--sdk-path <sdk>/crates/space-screener` points the dependency at a specific checkout.
 3. **Code.** Edit `src/lib.rs` (the screener) and `manifest.yaml` (id, columns, params, `http` hosts).
 4. **Build.** `st build` — compiles, writes `screener.wasm`, validates the manifest and wasm imports
    exactly like the terminal does. Fix every error it prints before going on.

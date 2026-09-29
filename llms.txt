@@ -34,4 +34,4 @@
 - No std::time/fs/net/thread, no println (use info!), no wasm-bindgen deps (getrandom js, chrono wasmbind); extism-pdk logging/http imports are refused; start section and `_start`/`_initialize`/`__wasm_call_ctors`/`hs_init` exports are refused (forbidden_export)
 - HTTP: https only, no redirects (3xx returned as is), no user info in URLs, timeout_ms 1000..=10000, body ≤ 8 MiB, http_batch bodies ≤ 48 MiB in total; rows ≤ 16 KiB each, ≤ 32 MiB in total
 - Exchange slugs lowercase (binance, bybit, okx, bitget, gate, mexc, kucoin, bingx, hyperliquid); markets spot|futures
-- Install st: `cargo install --path <sdk-checkout>/crates/st` (st init then uses that checkout); the git URL works after the SDK repo is published
+- Install st: `cargo install --git https://github.com/Space-Terminal/space-screener-sdk st` (st init then depends on the SDK by git); for SDK development `cargo install --path <sdk-checkout>/crates/st` (st init links to that checkout); `--sdk-path` overrides

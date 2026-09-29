@@ -6,7 +6,7 @@ exclude = ["examples"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-repository = "https://github.com/EvgeniiKobelev/space-screener-sdk"
+repository = "https://github.com/Space-Terminal/space-screener-sdk"
 
 [workspace.dependencies]
 space-screener = { path = "crates/space-screener" }

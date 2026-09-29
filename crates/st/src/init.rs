@@ -6,7 +6,7 @@ use crate::manifest;
 
 /// Oldest terminal with the screener runtime (ABI v1).
 pub const MIN_TERMINAL: &str = "0.104.70";
-const SDK_GIT: &str = "https://github.com/EvgeniiKobelev/space-screener-sdk";
+const SDK_GIT: &str = "https://github.com/Space-Terminal/space-screener-sdk";
 const BUNDLED_SDK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../space-screener");
 
 const CARGO_TOML: &str = include_str!("../templates/Cargo.toml.tmpl");
@@ -63,13 +63,42 @@ fn default_id(name: &str) -> String {
     format!("local.{}", kebab.trim_matches('-'))
 }
 
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".cargo")))
+}
+
+// `cargo install --git` builds st from a checkout inside the cargo cache; that path changes with every
+// update and disappears on a cache clean, so such builds point new projects at the git repository.
+fn in_cargo_cache(path: &Path, cargo_home: &Path) -> bool {
+    let home = cargo_home
+        .canonicalize()
+        .unwrap_or_else(|_| cargo_home.to_path_buf());
+    ["git/checkouts", "registry"]
+        .iter()
+        .any(|cache| path.starts_with(home.join(cache)))
+}
+
 fn sdk_dependency(sdk_path: Option<PathBuf>) -> Result<String> {
-    let path = match sdk_path {
+    select_sdk_dependency(sdk_path, Path::new(BUNDLED_SDK), cargo_home().as_deref())
+}
+
+/// `--sdk-path` wins; then the SDK st was built from, unless that is the cargo cache; then git.
+fn select_sdk_dependency(
+    explicit: Option<PathBuf>,
+    bundled: &Path,
+    cargo_home: Option<&Path>,
+) -> Result<String> {
+    let path = match explicit {
         Some(path) => Some(
             path.canonicalize()
                 .with_context(|| format!("--sdk-path {} does not exist", path.display()))?,
         ),
-        None => Path::new(BUNDLED_SDK).canonicalize().ok(),
+        None => bundled
+            .canonicalize()
+            .ok()
+            .filter(|path| !cargo_home.is_some_and(|home| in_cargo_cache(path, home))),
     };
     Ok(match path {
         Some(path) => format!(
@@ -139,6 +168,42 @@ mod tests {
         assert_eq!(type_name("8ball"), "Screener8ball");
         assert_eq!(default_id("My Screener"), "local.my-screener");
         assert!(manifest::is_valid_id(&default_id("OI_8")));
+    }
+
+    #[test]
+    fn sdk_dependency_prefers_explicit_then_local_checkout_then_git() {
+        let root = std::env::temp_dir().join(format!("st-init-sdk-{}", std::process::id()));
+        let home = root.join("cargo");
+        let cached = home.join("git/checkouts/space-screener-sdk-1a2b/3c4d/crates/space-screener");
+        let registry = home.join("registry/src/index/space-screener-0.1.0");
+        let local = root.join("work/space-screener-sdk/crates/space-screener");
+        for dir in [&cached, &registry, &local] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let git = format!("space-screener = {{ git = \"{SDK_GIT}\" }}");
+        let is_path = |dep: &str| dep.starts_with("space-screener = { path = '");
+
+        assert_eq!(
+            select_sdk_dependency(None, &cached, Some(&home)).unwrap(),
+            git
+        );
+        assert_eq!(
+            select_sdk_dependency(None, &registry, Some(&home)).unwrap(),
+            git
+        );
+        assert_eq!(
+            select_sdk_dependency(None, &root.join("missing"), Some(&home)).unwrap(),
+            git
+        );
+        assert!(is_path(
+            &select_sdk_dependency(None, &local, Some(&home)).unwrap()
+        ));
+        assert!(is_path(
+            &select_sdk_dependency(Some(cached.clone()), &local, Some(&home)).unwrap()
+        ));
+        assert!(select_sdk_dependency(Some(root.join("missing")), &local, Some(&home)).is_err());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
