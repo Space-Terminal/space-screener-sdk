@@ -300,6 +300,7 @@ impl Screener for FundingRates {
 
         all.retain(|f| f.apr_pct().abs() >= min_abs_apr);
         all.sort_by(|a, b| b.apr_pct().abs().total_cmp(&a.apr_pct().abs()));
+        let found = all.len();
         all.truncate(limit);
         let rows = all.iter().map(|f| {
             Row::new(format!("{}:{}", f.exchange, f.symbol))
@@ -311,12 +312,17 @@ impl Screener for FundingRates {
                 .cell("period", f.period_hours * HOUR_MS as f64)
                 .cell("next", f.next_ms.map(|t| t as f64))
         });
+        let shown = if all.len() < found {
+            format!("showing {} of {found} perpetuals", all.len())
+        } else {
+            format!("{found} perpetuals")
+        };
         if failed.is_empty() {
-            set_status(StatusTone::Ok, format!("{} perpetuals", all.len()))?;
+            set_status(StatusTone::Ok, shown)?;
         } else {
             set_status(
                 StatusTone::Warn,
-                format!("{} perpetuals; no data: {}", all.len(), failed.join(", ")),
+                format!("{shown}; no data: {}", failed.join(", ")),
             )?;
         }
         replace_rows(rows)?;
