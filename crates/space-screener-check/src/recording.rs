@@ -17,8 +17,14 @@ pub struct Recording {
     /// Interface language: `ru` or `en`.
     pub lang: String,
     pub params: BTreeMap<String, Value>,
+    /// The plugin's kv at `init`: kv survives restarts, so replay starts from it.
+    #[serde(default)]
+    pub kv: BTreeMap<String, Value>,
     pub started_ms: i64,
     pub events: Vec<Event>,
+    /// The recording hit its size cap and ended before the requested duration.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// Entry points the host called (`init`, `timer`, `click`) and the data host functions the
@@ -91,8 +97,19 @@ mod tests {
             matches!(&recording.events[1], Event::Call { function, .. } if function == "tickers")
         );
         assert_eq!(recording.events[2].t_ms(), 2000);
+        assert!(recording.kv.is_empty());
+        assert!(!recording.truncated);
         let back: Recording =
             serde_json::from_value(serde_json::to_value(&recording).unwrap()).unwrap();
         assert_eq!(back, recording);
+    }
+
+    #[test]
+    fn kv_and_truncation_roundtrip() {
+        let json = r#"{"v":1,"id":"ivan.oi","version":"0.1.0","terminal":"0.104.71","lang":"en",
+            "params":{},"kv":{"seen":["BTCUSDT"]},"started_ms":0,"events":[],"truncated":true}"#;
+        let recording: Recording = serde_json::from_str(json).unwrap();
+        assert_eq!(recording.kv["seen"], serde_json::json!(["BTCUSDT"]));
+        assert!(recording.truncated);
     }
 }
