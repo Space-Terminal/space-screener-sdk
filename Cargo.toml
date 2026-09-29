@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/space-screener", "crates/space-screener-check", "crates/st"]
+members = [
+    "crates/space-screener",
+    "crates/space-screener-check",
+    "crates/space-screener-harness",
+    "crates/st",
+]
 exclude = ["examples"]
 
 [workspace.package]
@@ -12,6 +17,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 space-screener = { path = "crates/space-screener" }
 space-screener-check = { path = "crates/space-screener-check" }
+space-screener-harness = { path = "crates/space-screener-harness" }
 extism-pdk = { version = "1.4.1", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,6 +33,11 @@ notify = "8"
 dirs = "6"
 semver = "1"
 wat = "1"
+extism = { version = "1.30.0", default-features = false }
+# extism 1.30 with default-features = false does not build without wasmtime's `anyhow`
+# feature (extism#903, fix not released); the dependency exists only for that.
+wasmtime = { version = "43", default-features = false, features = ["anyhow"] }
+cpu-time = "1.0"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

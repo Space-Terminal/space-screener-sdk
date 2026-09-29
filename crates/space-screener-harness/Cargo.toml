@@ -1,0 +1,22 @@
+[package]
+name = "space-screener-harness"
+description = "Headless host for Space Terminal screener plugins: replay recordings and trial runs"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+cpu-time = { workspace = true }
+extism = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+space-screener-check = { workspace = true }
+thiserror = { workspace = true }
+wasmtime = { workspace = true }
+
+[dev-dependencies]
+wat = { workspace = true }
+
+[lints]
+workspace = true
