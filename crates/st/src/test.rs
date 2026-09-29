@@ -11,6 +11,8 @@ use crate::project::{self, Built};
 pub const RECORDINGS_DIR: &str = "recordings";
 const EXPECTED_SUFFIX: &str = ".expected.json";
 const DIFF_LINES: usize = 20;
+/// Error and warning lines of the plugin log shown when calls failed.
+const ERROR_LINES: usize = 10;
 
 /// What a replay must reproduce: the rows the pane would show, the alerts, the status and the
 /// markets clicks opened. Logs and CPU numbers are left out — they change without the output
@@ -137,11 +139,8 @@ fn test_one(built: &Built, path: &Path, update: bool) -> Result<bool> {
     for warning in &output.warnings {
         eprintln!("  warning: {warning}");
     }
-    let mut passed = true;
-    if stats.traps > 0 {
-        eprintln!("  the plugin trapped {} times", stats.traps);
-        passed = false;
-    }
+    let broken = print_call_errors(&output);
+    let mut passed = !broken;
 
     let snapshot = Snapshot::from(&output);
     let expected_path = expected_path(path);
@@ -164,6 +163,10 @@ fn test_one(built: &Built, path: &Path, update: bool) -> Result<bool> {
             }
             passed = false;
         }
+        None if broken => eprintln!(
+            "  {} not written: fix the failing calls first",
+            expected_path.display()
+        ),
         None => {
             let mut text =
                 serde_json::to_string_pretty(&snapshot).context("cannot encode the snapshot")?;
@@ -174,6 +177,40 @@ fn test_one(built: &Built, path: &Path, update: bool) -> Result<bool> {
         }
     }
     Ok(passed)
+}
+
+/// Calls that returned an error, trapped or went over their CPU budget fail the test: a
+/// snapshot of such a run would record the failure as the expected output.
+fn print_call_errors(output: &Output) -> bool {
+    let stats = &output.stats;
+    if stats.failures + stats.traps + stats.over_budget == 0 {
+        return false;
+    }
+    eprintln!(
+        "  calls failed: {} returned an error, {} trapped, {} over the CPU budget",
+        stats.failures, stats.traps, stats.over_budget
+    );
+    let lines: Vec<_> = output
+        .logs
+        .iter()
+        .filter(|line| matches!(line.level.as_str(), "error" | "warn"))
+        .collect();
+    let mut shown: Vec<(&str, &str, usize)> = Vec::new();
+    for line in &lines {
+        match shown.last_mut() {
+            Some((level, msg, count)) if *level == line.level && *msg == line.msg => *count += 1,
+            _ => shown.push((&line.level, &line.msg, 1)),
+        }
+    }
+    for (level, msg, count) in &shown[shown.len().saturating_sub(ERROR_LINES)..] {
+        let times = if *count > 1 {
+            format!(" (×{count})")
+        } else {
+            String::new()
+        };
+        eprintln!("    {level}{times} {msg}");
+    }
+    true
 }
 
 fn row_changes(before: &Row, after: &Row) -> String {
@@ -259,6 +296,109 @@ mod tests {
 
     fn row(key: &str, v: i64) -> Row {
         serde_json::from_value(serde_json::json!({"key": key, "cells": {"v": v}})).unwrap()
+    }
+
+    const MANIFEST: &str = "abi: 1\nid: test.st\nversion: 0.1.0\nname: {en: Test}\nlang: rust\n\
+        min_terminal: 0.104.0\ntimer_ms: 1000\ncolumns: [{key: v, type: number}]\n";
+
+    /// `on_timer` sends `{"rows": [{"key": "a", "cells": {"v": 1}}]}` to emit_rows, then ends
+    /// with `tail` (`(i32.const 0)` = success).
+    fn plugin(tail: &str) -> Vec<u8> {
+        let rows = r#"{"rows":[{"key":"a","cells":{"v":1}}]}"#;
+        let len = rows.len();
+        let data = rows.replace('"', "\\\"");
+        let wat = format!(
+            r#"(module
+  (import "extism:host/env" "alloc" (func $alloc (param i64) (result i64)))
+  (import "extism:host/env" "store_u8" (func $store_u8 (param i64 i32)))
+  (import "extism:host/env" "error_set" (func $error_set (param i64)))
+  (import "extism:host/user" "emit_rows" (func $emit_rows (param i64) (result i64)))
+  (memory 1)
+  (data (i32.const 0) "{data}")
+  (data (i32.const 256) "boom")
+  (func $copy (param $ptr i32) (param $len i32) (result i64)
+    (local $off i64) (local $i i32)
+    (local.set $off (call $alloc (i64.extend_i32_u (local.get $len))))
+    (block $done
+      (loop $next
+        (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+        (call $store_u8
+          (i64.add (local.get $off) (i64.extend_i32_u (local.get $i)))
+          (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $next)))
+    (local.get $off))
+  (func (export "init") (result i32) (i32.const 0))
+  (func (export "on_timer") (result i32)
+    (drop (call $emit_rows (call $copy (i32.const 0) (i32.const {len}))))
+    {tail}))"#
+        );
+        wat::parse_str(wat).unwrap()
+    }
+
+    const FAIL: &str = "(call $error_set (call $copy (i32.const 256) (i32.const 4))) (i32.const 1)";
+
+    fn project(name: &str, wasm: &[u8]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("st-test-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(RECORDINGS_DIR)).unwrap();
+        std::fs::write(dir.join("manifest.yaml"), MANIFEST).unwrap();
+        std::fs::write(dir.join("screener.wasm"), wasm).unwrap();
+        let recording = serde_json::json!({
+            "v": 1, "id": "test.st", "version": "0.1.0", "terminal": "0.104.71", "lang": "en",
+            "params": {}, "started_ms": 1000,
+            "events": [
+                {"kind": "init", "t_ms": 1000, "input": {"params": {}, "terminal": "0.104.71", "lang": "en", "now_ms": 1000}},
+                {"kind": "timer", "t_ms": 2000, "input": {"now_ms": 2000}}
+            ]
+        });
+        std::fs::write(
+            dir.join(RECORDINGS_DIR).join("r.json"),
+            recording.to_string(),
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_clean_run_writes_its_snapshot_then_passes() {
+        let dir = project("ok", &plugin("(i32.const 0)"));
+        run(&dir, None, false, false).unwrap();
+        assert!(dir.join(RECORDINGS_DIR).join("r.expected.json").is_file());
+        run(&dir, None, false, false).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn failing_calls_fail_the_test_and_write_no_snapshot() {
+        for (name, tail) in [("error", FAIL), ("trap", "(unreachable)")] {
+            let dir = project(name, &plugin(tail));
+            assert!(run(&dir, None, false, false).is_err(), "{name}");
+            assert!(run(&dir, None, true, false).is_err(), "{name}");
+            assert!(
+                !dir.join(RECORDINGS_DIR).join("r.expected.json").exists(),
+                "{name}"
+            );
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn call_errors_show_the_plugin_message() {
+        let manifest = space_screener_check::Manifest::parse(MANIFEST).unwrap();
+        let dir = project("message", &plugin(FAIL));
+        let recording = read_recording(&dir.join(RECORDINGS_DIR).join("r.json")).unwrap();
+        let output = replay(&manifest, &plugin(FAIL), &recording).unwrap();
+        assert_eq!(output.stats.failures, 1);
+        assert!(
+            output
+                .logs
+                .iter()
+                .any(|l| l.level == "error" && l.msg.contains("boom")),
+            "{:?}",
+            output.logs
+        );
+        assert!(print_call_errors(&output));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
