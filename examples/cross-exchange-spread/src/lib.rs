@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use space_screener::MouseButton;
 use space_screener::prelude::*;
 
 /// Snapshots older than this are left out: their price no longer compares.
@@ -8,7 +9,7 @@ const STALE_MS: i64 = secs(60);
 #[derive(Debug, Clone, PartialEq)]
 struct Leg {
     exchange: String,
-    /// The exchange's own symbol, for `open_spread`.
+    /// The exchange's own symbol, for `open_market` and `open_spread`.
     symbol: String,
     last: f64,
 }
@@ -56,6 +57,27 @@ fn gaps(legs: BTreeMap<String, Vec<Leg>>, min_spread: f64, max_spread: f64) -> V
             })
         })
         .collect()
+}
+
+/// What a click on a row opens. `open_market` goes to the book linked with the screener pane, like
+/// a click in the built-in screener; `open_spread` always opens a new tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClickTarget {
+    /// Left click: the cheaper exchange, where to buy.
+    Cheap,
+    /// Right click: the dearer exchange, where to sell.
+    Dear,
+    /// Middle or Shift+left click: both legs as a spread.
+    Spread,
+}
+
+fn click_target(click: &Click) -> ClickTarget {
+    match click.button {
+        MouseButton::Middle => ClickTarget::Spread,
+        MouseButton::Left if click.modifiers.shift => ClickTarget::Spread,
+        MouseButton::Left => ClickTarget::Cheap,
+        MouseButton::Right => ClickTarget::Dear,
+    }
 }
 
 /// The same pair across connected exchanges: the cheapest and the dearest last price.
@@ -159,8 +181,13 @@ impl Screener for CrossSpread {
     }
 
     fn on_click(&mut self, click: &Click) -> ScreenerResult {
-        if let Some((cheap, dear)) = self.legs.get(&click.row.key) {
-            open_spread(cheap, dear, None)?;
+        let Some((cheap, dear)) = self.legs.get(&click.row.key) else {
+            return Ok(());
+        };
+        match click_target(click) {
+            ClickTarget::Cheap => open_market(cheap)?,
+            ClickTarget::Dear => open_market(dear)?,
+            ClickTarget::Spread => open_spread(cheap, dear, None)?,
         }
         Ok(())
     }
@@ -170,7 +197,41 @@ export_screener!(CrossSpread, on_click);
 
 #[cfg(test)]
 mod tests {
+    use space_screener::Modifiers;
+
     use super::*;
+
+    #[test]
+    fn click_opens_a_leg_and_shift_or_middle_the_spread() {
+        let click = |button, shift| Click {
+            button,
+            modifiers: Modifiers {
+                shift,
+                ..Modifiers::default()
+            },
+            ..Click::default()
+        };
+        assert_eq!(
+            click_target(&click(MouseButton::Left, false)),
+            ClickTarget::Cheap
+        );
+        assert_eq!(
+            click_target(&click(MouseButton::Right, false)),
+            ClickTarget::Dear
+        );
+        assert_eq!(
+            click_target(&click(MouseButton::Right, true)),
+            ClickTarget::Dear
+        );
+        assert_eq!(
+            click_target(&click(MouseButton::Middle, false)),
+            ClickTarget::Spread
+        );
+        assert_eq!(
+            click_target(&click(MouseButton::Left, true)),
+            ClickTarget::Spread
+        );
+    }
 
     fn leg(exchange: &str, last: f64) -> Leg {
         Leg {
