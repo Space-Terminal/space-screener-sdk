@@ -1,10 +1,10 @@
 abi: 1
 id: space.cross-exchange-spread
-version: 0.1.1
+version: 0.1.2
 name: {ru: "Спред между биржами", en: "Cross-exchange spread"}
 description:
-  ru: "Одна и та же пара на разных подключённых биржах: где дешевле, где дороже и разница в процентах по последним ценам снимков тикеров (обновляются раз в несколько секунд). Клик — дешёвая биржа в связанный стакан, правый клик — дорогая, Shift+клик или колесо — спред двух бирж в новой вкладке"
-  en: "The same pair on different connected exchanges: where it is cheaper, where it is dearer and the gap in percent, from the last prices of the ticker snapshots (refreshed every few seconds). A click opens the cheaper exchange in the linked book, a right click the dearer one, Shift+click or the wheel the spread of the two exchanges in a new tab"
+  ru: "Одна и та же пара на разных подключённых биржах: где дешевле, где дороже и разница в процентах по последним ценам снимков тикеров (обновляются раз в несколько секунд). Клик — спред двух бирж: два стакана сверху и график под ними; правый клик — дешёвая биржа в связанный стакан. Какие биржи сравнивать — галочками в параметрах, по умолчанию все"
+  en: "The same pair on different connected exchanges: where it is cheaper, where it is dearer and the gap in percent, from the last prices of the ticker snapshots (refreshed every few seconds). A click opens the spread of the two exchanges: two books on top and the chart below; a right click opens the cheaper exchange in the linked book. Pick the exchanges to compare with the checkboxes in the parameters, all by default"
 lang: rust
 categories: [spread]
 source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/cross-exchange-spread
@@ -25,3 +25,26 @@ params:
   - {key: min_spread, type: number, title: {ru: "Мин. спред, %", en: "Min spread, %"}, default: 0.1, min: 0}
   - {key: max_spread, type: number, title: {ru: "Макс. спред, % (отсекает разные монеты под одним тикером)", en: "Max spread, % (drops different coins under one ticker)"}, default: 20, min: 0}
   - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 200, min: 1, max: 2000}
+  - {key: ex_aster, type: bool, title: {ru: "Биржа Aster", en: "Exchange Aster"}, default: true}
+  - {key: ex_binance, type: bool, title: {ru: "Биржа Binance", en: "Exchange Binance"}, default: true}
+  - {key: ex_binancealpha, type: bool, title: {ru: "Биржа Binance Alpha", en: "Exchange Binance Alpha"}, default: true}
+  - {key: ex_bingx, type: bool, title: {ru: "Биржа BingX", en: "Exchange BingX"}, default: true}
+  - {key: ex_bitget, type: bool, title: {ru: "Биржа Bitget", en: "Exchange Bitget"}, default: true}
+  - {key: ex_bitrue, type: bool, title: {ru: "Биржа Bitrue", en: "Exchange Bitrue"}, default: true}
+  - {key: ex_bitunix, type: bool, title: {ru: "Биржа Bitunix", en: "Exchange Bitunix"}, default: true}
+  - {key: ex_blofin, type: bool, title: {ru: "Биржа Blofin", en: "Exchange Blofin"}, default: true}
+  - {key: ex_bybit, type: bool, title: {ru: "Биржа Bybit", en: "Exchange Bybit"}, default: true}
+  - {key: ex_edgex, type: bool, title: {ru: "Биржа EdgeX", en: "Exchange EdgeX"}, default: true}
+  - {key: ex_gate, type: bool, title: {ru: "Биржа Gate", en: "Exchange Gate"}, default: true}
+  - {key: ex_hotcoin, type: bool, title: {ru: "Биржа Hotcoin", en: "Exchange Hotcoin"}, default: true}
+  - {key: ex_hyperliquid, type: bool, title: {ru: "Биржа Hyperliquid", en: "Exchange Hyperliquid"}, default: true}
+  - {key: ex_kucoin, type: bool, title: {ru: "Биржа KuCoin", en: "Exchange KuCoin"}, default: true}
+  - {key: ex_lighter, type: bool, title: {ru: "Биржа Lighter", en: "Exchange Lighter"}, default: true}
+  - {key: ex_mexc, type: bool, title: {ru: "Биржа MEXC", en: "Exchange MEXC"}, default: true}
+  - {key: ex_okx, type: bool, title: {ru: "Биржа OKX", en: "Exchange OKX"}, default: true}
+  - {key: ex_ourbit, type: bool, title: {ru: "Биржа Ourbit", en: "Exchange Ourbit"}, default: true}
+  - {key: ex_phemex, type: bool, title: {ru: "Биржа Phemex", en: "Exchange Phemex"}, default: true}
+  - {key: ex_polymarket, type: bool, title: {ru: "Биржа Polymarket", en: "Exchange Polymarket"}, default: true}
+  - {key: ex_reya, type: bool, title: {ru: "Биржа Reya", en: "Exchange Reya"}, default: true}
+  - {key: ex_toobit, type: bool, title: {ru: "Биржа Toobit", en: "Exchange Toobit"}, default: true}
+  - {key: ex_xt, type: bool, title: {ru: "Биржа XT", en: "Exchange XT"}, default: true}
