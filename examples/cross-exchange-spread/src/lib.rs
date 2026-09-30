@@ -5,6 +5,9 @@ use space_screener::prelude::*;
 
 /// Snapshots older than this are left out: their price no longer compares.
 const STALE_MS: i64 = secs(60);
+/// An exchange whose tickers failed is not asked again for this long: the terminal may hold a
+/// `tickers` call for seconds while it waits for a snapshot, and every click waits for the timer.
+const RETRY_MS: i64 = secs(60);
 
 #[derive(Debug, Clone, PartialEq)]
 struct Leg {
@@ -59,25 +62,25 @@ fn gaps(legs: BTreeMap<String, Vec<Leg>>, min_spread: f64, max_spread: f64) -> V
         .collect()
 }
 
-/// What a click on a row opens. `open_market` goes to the book linked with the screener pane, like
-/// a click in the built-in screener; `open_spread` always opens a new tab.
+/// What a click on a row opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClickTarget {
-    /// Left click: the cheaper exchange, where to buy.
-    Cheap,
-    /// Right click: the dearer exchange, where to sell.
-    Dear,
-    /// Middle or Shift+left click: both legs as a spread.
+    /// Left or middle click: both exchanges as a spread — two books on top, the chart below.
     Spread,
+    /// Right click: the cheaper exchange in the book linked with the screener pane.
+    Cheap,
 }
 
 fn click_target(click: &Click) -> ClickTarget {
     match click.button {
-        MouseButton::Middle => ClickTarget::Spread,
-        MouseButton::Left if click.modifiers.shift => ClickTarget::Spread,
-        MouseButton::Left => ClickTarget::Cheap,
-        MouseButton::Right => ClickTarget::Dear,
+        MouseButton::Left | MouseButton::Middle => ClickTarget::Spread,
+        MouseButton::Right => ClickTarget::Cheap,
     }
+}
+
+/// The `ex_<slug>` switch of an exchange; exchanges the manifest does not list stay on.
+fn exchange_enabled(params: &Params, exchange: &str) -> bool {
+    params.bool_or(&format!("ex_{exchange}"), true)
 }
 
 /// The same pair across connected exchanges: the cheapest and the dearest last price.
@@ -85,6 +88,16 @@ fn click_target(click: &Click) -> ClickTarget {
 struct CrossSpread {
     /// Row key → (cheap leg, dear leg), for clicks.
     legs: HashMap<String, (MarketRef, MarketRef)>,
+    /// Exchange → time until which its tickers are not asked for, after an error.
+    retry_at: HashMap<String, i64>,
+}
+
+impl CrossSpread {
+    fn waiting(&self, exchange: &str, now_ms: i64) -> bool {
+        self.retry_at
+            .get(exchange)
+            .is_some_and(|&retry_at| now_ms < retry_at)
+    }
 }
 
 impl Screener for CrossSpread {
@@ -101,14 +114,28 @@ impl Screener for CrossSpread {
 
         let mut by_pair: BTreeMap<String, Vec<Leg>> = BTreeMap::new();
         let mut sources = 0;
+        let mut waiting = 0;
         for ex in exchanges()? {
-            if !ex.connected || ex.market != market {
+            if !ex.connected || ex.market != market || !exchange_enabled(&params, &ex.exchange) {
+                continue;
+            }
+            if self.waiting(&ex.exchange, now_ms) {
+                waiting += 1;
                 continue;
             }
             let snapshot = match tickers(&ex.exchange, market) {
-                Ok(snapshot) => snapshot,
+                Ok(snapshot) => {
+                    self.retry_at.remove(&ex.exchange);
+                    snapshot
+                }
                 Err(e) => {
-                    warn!("{} {market}: {e}", ex.exchange);
+                    warn!(
+                        "{} {market}: {e}; next try in {} s",
+                        ex.exchange,
+                        RETRY_MS / 1000
+                    );
+                    self.retry_at.insert(ex.exchange.clone(), now_ms + RETRY_MS);
+                    waiting += 1;
                     continue;
                 }
             };
@@ -165,15 +192,20 @@ impl Screener for CrossSpread {
                     ),
                 )
         });
+        let waiting_note = if waiting > 0 {
+            format!("; {waiting} without tickers, retried within a minute")
+        } else {
+            String::new()
+        };
         if sources < 2 {
             set_status(
                 StatusTone::Warn,
-                format!("connect two or more {market} exchanges to compare prices"),
+                format!("connect two or more {market} exchanges to compare prices{waiting_note}"),
             )?;
         } else {
             set_status(
                 StatusTone::Ok,
-                format!("{sources} exchanges, {} pairs", gaps.len()),
+                format!("{sources} exchanges, {} pairs{waiting_note}", gaps.len()),
             )?;
         }
         replace_rows(rows)?;
@@ -185,9 +217,8 @@ impl Screener for CrossSpread {
             return Ok(());
         };
         match click_target(click) {
+            ClickTarget::Spread => open_spread(cheap, dear, Some(SpreadLayout::Vertical))?,
             ClickTarget::Cheap => open_market(cheap)?,
-            ClickTarget::Dear => open_market(dear)?,
-            ClickTarget::Spread => open_spread(cheap, dear, None)?,
         }
         Ok(())
     }
@@ -202,7 +233,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn click_opens_a_leg_and_shift_or_middle_the_spread() {
+    fn click_opens_the_spread_and_right_click_the_cheaper_leg() {
         let click = |button, shift| Click {
             button,
             modifiers: Modifiers {
@@ -213,24 +244,45 @@ mod tests {
         };
         assert_eq!(
             click_target(&click(MouseButton::Left, false)),
-            ClickTarget::Cheap
-        );
-        assert_eq!(
-            click_target(&click(MouseButton::Right, false)),
-            ClickTarget::Dear
-        );
-        assert_eq!(
-            click_target(&click(MouseButton::Right, true)),
-            ClickTarget::Dear
-        );
-        assert_eq!(
-            click_target(&click(MouseButton::Middle, false)),
             ClickTarget::Spread
         );
         assert_eq!(
             click_target(&click(MouseButton::Left, true)),
             ClickTarget::Spread
         );
+        assert_eq!(
+            click_target(&click(MouseButton::Middle, false)),
+            ClickTarget::Spread
+        );
+        assert_eq!(
+            click_target(&click(MouseButton::Right, false)),
+            ClickTarget::Cheap
+        );
+    }
+
+    #[test]
+    fn exchanges_are_on_unless_switched_off() {
+        let params = Params::new(
+            serde_json::json!({"ex_mexc": false, "ex_okx": true})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        );
+        assert!(!exchange_enabled(&params, "mexc"));
+        assert!(exchange_enabled(&params, "okx"));
+        assert!(exchange_enabled(&params, "binance"));
+    }
+
+    #[test]
+    fn a_failed_exchange_waits_a_minute() {
+        let mut screener = CrossSpread::default();
+        screener
+            .retry_at
+            .insert("reya".to_string(), 1_000 + RETRY_MS);
+        assert!(screener.waiting("reya", 1_000));
+        assert!(screener.waiting("reya", 1_000 + RETRY_MS - 1));
+        assert!(!screener.waiting("reya", 1_000 + RETRY_MS));
+        assert!(!screener.waiting("binance", 1_000));
     }
 
     fn leg(exchange: &str, last: f64) -> Leg {
