@@ -1,10 +1,10 @@
 abi: 1
 id: space.cross-exchange-spread
-version: 0.1.0
+version: 0.1.1
 name: {ru: "Спред между биржами", en: "Cross-exchange spread"}
 description:
-  ru: "Одна и та же пара на разных подключённых биржах: где дешевле, где дороже и разница в процентах по последним ценам снимков тикеров (обновляются раз в несколько секунд). Клик открывает спред двух ног"
-  en: "The same pair on different connected exchanges: where it is cheaper, where it is dearer and the gap in percent, from the last prices of the ticker snapshots (refreshed every few seconds). A click opens the spread of the two legs"
+  ru: "Одна и та же пара на разных подключённых биржах: где дешевле, где дороже и разница в процентах по последним ценам снимков тикеров (обновляются раз в несколько секунд). Клик — дешёвая биржа в связанный стакан, правый клик — дорогая, Shift+клик или колесо — спред двух бирж в новой вкладке"
+  en: "The same pair on different connected exchanges: where it is cheaper, where it is dearer and the gap in percent, from the last prices of the ticker snapshots (refreshed every few seconds). A click opens the cheaper exchange in the linked book, a right click the dearer one, Shift+click or the wheel the spread of the two exchanges in a new tab"
 lang: rust
 categories: [spread]
 source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/cross-exchange-spread
