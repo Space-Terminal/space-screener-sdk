@@ -1,6 +1,6 @@
 //! Signals of the Space screener aggregator the terminal shares with plugins (ABI v1.1).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -155,12 +155,14 @@ pub struct Signal {
     pub link: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at_ms: Option<i64>,
+    // Boxed: a snapshot holds up to ~20000 signals with one payload each; inline, every
+    // signal would be as large as all three payloads together.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub activity: Option<ActivitySignal>,
+    pub activity: Option<Box<ActivitySignal>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub density: Option<DensitySignal>,
+    pub density: Option<Box<DensitySignal>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prints: Option<PrintsSignal>,
+    pub prints: Option<Box<PrintsSignal>>,
 }
 
 impl Signal {
@@ -254,28 +256,23 @@ impl SignalFeed {
             ..FeedUpdate::default()
         };
         if delta.reset {
-            let fresh: BTreeMap<String, Signal> = delta
-                .upserts
-                .into_iter()
-                .map(|signal| (signal.id.clone(), signal))
+            // The previous snapshot goes before the new one is indexed: two snapshots of
+            // ~20000 signals at once do not fit the plugin's memory.
+            let fresh: HashSet<&str> = delta.upserts.iter().map(|s| s.id.as_str()).collect();
+            update.removed = std::mem::take(&mut self.signals)
+                .into_keys()
+                .filter(|id| !fresh.contains(id.as_str()))
                 .collect();
-            update.removed = self
-                .signals
-                .keys()
-                .filter(|id| !fresh.contains_key(*id))
-                .cloned()
-                .collect();
-            update.upserted = fresh.keys().cloned().collect();
-            self.signals = fresh;
-            return update;
         }
         for signal in delta.upserts {
             update.upserted.push(signal.id.clone());
             self.signals.insert(signal.id.clone(), signal);
         }
-        for id in delta.removed {
-            if self.signals.remove(&id).is_some() {
-                update.removed.push(id);
+        if !delta.reset {
+            for id in delta.removed {
+                if self.signals.remove(&id).is_some() {
+                    update.removed.push(id);
+                }
             }
         }
         update

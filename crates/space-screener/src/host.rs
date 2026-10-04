@@ -61,14 +61,41 @@ type HostFn = unsafe extern "C" fn(u64) -> u64;
 
 #[cfg(target_arch = "wasm32")]
 mod raw {
+    use std::io::{self, BufReader, Read};
+
     use extism_pdk::Memory;
+    use serde::de::DeserializeOwned;
 
     use super::HostFn;
     use crate::errors::{Error, Result};
 
-    // Input and output are freed right away: a batch answer can weigh megabytes and
-    // Extism would otherwise keep it until the export returns.
-    pub(super) fn call(f: HostFn, input: String) -> Result<String> {
+    const READ_CHUNK: usize = 64 * 1024;
+    /// Replies above this are parsed in place: a signals snapshot weighs megabytes, and a copy
+    /// of it next to the parsed value and the plugin's previous state does not fit 64 MB.
+    /// Smaller ones are copied: parsing a slice is about twice as fast as a reader.
+    const COPY_MAX: usize = 1024 * 1024;
+
+    /// Reads a host reply out of Extism memory, chunk by chunk.
+    struct HostReader {
+        offs: u64,
+        left: usize,
+    }
+
+    impl Read for HostReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = buf.len().min(self.left);
+            // SAFETY: `offs..offs + left` stays inside the output block `Memory::find` returned,
+            // which is freed only after parsing.
+            unsafe { extism_pdk::extism::load(self.offs, &mut buf[..n]) };
+            self.offs += n as u64;
+            self.left -= n;
+            Ok(n)
+        }
+    }
+
+    // Input and output are freed right away: Extism would otherwise keep them until the
+    // export returns.
+    pub(super) fn call<O: DeserializeOwned>(f: HostFn, input: String) -> Result<O> {
         let mem =
             Memory::from_bytes(input.as_bytes()).map_err(|e| Error::Call(format!("{e:#}")))?;
         let offs = mem.offset();
@@ -77,18 +104,28 @@ mod raw {
         mem.free();
         let out =
             Memory::find(out_offs).ok_or_else(|| Error::Call("host returned no output".into()))?;
-        let bytes = out.to_vec();
+        let parsed = if out.len() <= COPY_MAX {
+            serde_json::from_slice(&out.to_vec())
+        } else {
+            let reader = HostReader {
+                offs: out.offset(),
+                left: out.len(),
+            };
+            serde_json::from_reader(BufReader::with_capacity(READ_CHUNK, reader))
+        };
         out.free();
-        String::from_utf8(bytes).map_err(|e| Error::Call(e.to_string()))
+        Ok(parsed?)
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 mod raw {
+    use serde::de::DeserializeOwned;
+
     use super::HostFn;
     use crate::errors::{Error, Result};
 
-    pub(super) fn call(_: HostFn, _: String) -> Result<String> {
+    pub(super) fn call<O: DeserializeOwned>(_: HostFn, _: String) -> Result<O> {
         Err(Error::NotInTerminal)
     }
 }
@@ -152,8 +189,7 @@ struct EmitRows<'a> {
 }
 
 fn call<I: Serialize + ?Sized, O: DeserializeOwned>(f: HostFn, input: &I) -> Result<O> {
-    let out = raw::call(f, serde_json::to_string(input)?)?;
-    serde_json::from_str::<Envelope<O>>(&out)?.into_result()
+    raw::call::<Envelope<O>>(f, serde_json::to_string(input)?)?.into_result()
 }
 
 pub fn http(req: &HttpRequest) -> Result<HttpResponse> {
