@@ -2594,6 +2594,7 @@ dependencies = [
  "flate2",
  "notify",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
