@@ -1,0 +1,49 @@
+abi: 1
+id: space.density
+version: 0.1.0
+name: {ru: "Density", en: "Density"}
+description:
+  ru: "Крупные заявки (плотности) в стаканах бирж в реальном времени от сервера Space: биржа, тикер, сторона, цена, текущий и начальный объём в долларах, сколько съедено, дистанция до цены, сколько живёт и сколько было касаний. Клик открывает стакан и ставит на цене плотности умный уровень с её живыми метриками (выключается в параметрах); ★ — в избранное, ⊘ — инструмент в чёрный список"
+  en: "Large resting orders (densities) in exchange order books, live from the Space server: exchange, symbol, side, price, the dollar size now and at the start, how much is eaten, the distance to the price, how long it lives and how many times the price touched it. A click opens the order book and places a smart level at the density's price with its live metrics (can be turned off in the parameters); ★ pins a level, ⊘ blacklists the instrument"
+lang: rust
+categories: [orderbook]
+source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/density
+min_terminal: 0.104.72
+signals: [density]
+timer_ms: 1000
+columns:
+  - {key: fav, type: text, title: {ru: "★", en: "★"}, width: 28}
+  - {key: ban, type: text, title: {ru: "⊘", en: "⊘"}, width: 28}
+  - {key: time, type: time, title: {ru: "Время", en: "Time"}, sort: desc}
+  - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
+  - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
+  - {key: side, type: text, title: {ru: "Сторона", en: "Side"}}
+  - {key: price, type: price, title: {ru: "Цена", en: "Price"}}
+  - {key: initial, type: usd, title: {ru: "Начальный $", en: "Initial $"}}
+  - {key: current, type: usd, title: {ru: "Текущий $", en: "Current $"}}
+  - {key: avg, type: usd, title: {ru: "Средний $", en: "Average $"}}
+  - {key: eaten, type: percent, title: {ru: "Съедено", en: "Eaten"}}
+  - {key: distance, type: percent, title: {ru: "Дистанция", en: "Distance"}}
+  - {key: lifetime, type: duration, title: {ru: "Жизнь", en: "Lifetime"}}
+  - {key: status, type: text, title: {ru: "Статус", en: "Status"}}
+  - {key: touches, type: integer, title: {ru: "Касания", en: "Touches"}}
+params:
+  - {key: search, type: text, title: {ru: "Тикер содержит", en: "Symbol contains"}, default: ""}
+  - {key: exchanges, type: text, title: {ru: "Только биржи (через запятую, пусто — все)", en: "Only exchanges (comma-separated, empty — all)"}, default: ""}
+  - {key: exclude_exchanges, type: text, title: {ru: "Скрыть биржи", en: "Hide exchanges"}, default: ""}
+  - {key: market, type: select, title: {ru: "Рынок", en: "Market"}, default: both, options: [both, spot, futures]}
+  - {key: side, type: select, title: {ru: "Сторона", en: "Side"}, default: both, options: [both, bid, ask]}
+  - {key: hide_dead, type: bool, title: {ru: "Скрыть мёртвые", en: "Hide dead"}, default: false}
+  - {key: min_current, type: number, title: {ru: "Мин. текущий объём, $", en: "Min current size, $"}, default: 0, min: 0}
+  - {key: min_initial, type: number, title: {ru: "Мин. начальный объём, $", en: "Min initial size, $"}, default: 0, min: 0}
+  - {key: max_eaten, type: number, title: {ru: "Макс. съедено, % (0 — без ограничения)", en: "Max eaten, % (0 — no limit)"}, default: 0, min: 0, max: 100}
+  - {key: max_distance, type: number, title: {ru: "Макс. дистанция, % (0 — без ограничения)", en: "Max distance, % (0 — no limit)"}, default: 0, min: 0}
+  - {key: min_touches, type: integer, title: {ru: "Мин. касаний", en: "Min touches"}, default: 0, min: 0}
+  - {key: min_lifetime_s, type: integer, title: {ru: "Мин. время жизни, с", en: "Min lifetime, s"}, default: 0, min: 0}
+  - {key: avg_multiplier, type: number, title: {ru: "Текущий / средний ≥ (0 — выключено)", en: "Current / average ≥ (0 — off)"}, default: 1, min: 0}
+  - {key: smart_level, type: bool, title: {ru: "Клик ставит умный уровень", en: "A click places a smart level"}, default: true}
+  - {key: smart_level_sound, type: bool, title: {ru: "Звук умного уровня", en: "Smart level sound"}, default: false}
+  - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 2000, min: 1, max: 5000}
+  - {key: hide_blacklisted, type: bool, title: {ru: "Скрыть чёрный список", en: "Hide the blacklist"}, default: false}
+  - {key: hide_usdt, type: bool, title: {ru: "Скрыть USDT в тикере", en: "Hide USDT in symbols"}, default: false}
+limits: {cpu_ms_per_call: 1000}
