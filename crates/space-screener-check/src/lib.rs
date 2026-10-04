@@ -13,12 +13,15 @@ mod report;
 pub mod wasm;
 
 pub use manifest::{
-    ABI_VERSION, Column, ColumnType, HistoryKind, Lang, Limits, Localized, Manifest, PluginLang,
-    SortDir, TerminalTooOld, is_valid_id, normalize_host,
+    ABI_1_1_TERMINAL, ABI_VERSION, Column, ColumnType, HistoryKind, Lang, Limits, Localized,
+    Manifest, PluginLang, SignalSource, SortDir, TerminalTooOld, is_valid_id, normalize_host,
 };
 pub use params::{Param, ParamError, ParamProblem, ParamType, decimal_from_number};
 pub use recording::Recording;
 pub use registry::RegistryInfo;
 pub use release::Release;
 pub use report::{Code, Issue, Report};
-pub use wasm::{ENV_IMPORTS, HOST_FUNCTIONS, MAX_WASM_BYTES, WasmInfo, inspect};
+pub use wasm::{
+    ENV_IMPORTS, HOST_FUNCTIONS, HOST_FUNCTIONS_SINCE, MAX_WASM_BYTES, WasmInfo, check_imports,
+    host_functions_for, inspect,
+};

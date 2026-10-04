@@ -21,6 +21,10 @@ pub const DEFAULT_CPU_MS: u64 = 250;
 pub const MAX_CPU_MS: u64 = 1000;
 pub const MAX_COLUMN_WIDTH: f32 = 2000.0;
 
+/// First terminal with ABI v1.1: `signals` in the manifest, host functions `signals` and
+/// `open_markets`, `smart_level` of `open_market`.
+pub const ABI_1_1_TERMINAL: semver::Version = semver::Version::new(0, 104, 72);
+
 /// Ids that collide with static routes of the terminal's local API
 /// (`/api/v1/screeners/install`, `/api/v1/screeners/sync`).
 pub const RESERVED_IDS: &[&str] = &["install", "sync"];
@@ -78,6 +82,34 @@ pub enum PluginLang {
 pub enum HistoryKind {
     Cluster,
     Replay,
+}
+
+/// Signal feed of the Space screener aggregator the terminal shares with plugins (ABI v1.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SignalSource {
+    Activity,
+    Density,
+    Prints,
+}
+
+impl SignalSource {
+    pub const ALL: &[Self] = &[Self::Activity, Self::Density, Self::Prints];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Activity => "activity",
+            Self::Density => "density",
+            Self::Prints => "prints",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|source| source.as_str() == text)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +209,7 @@ pub struct Manifest {
     /// Trimmed and lower-cased.
     pub http: Vec<String>,
     pub history: Vec<HistoryKind>,
+    pub signals: Vec<SignalSource>,
     pub timer: Duration,
     pub columns: Vec<Column>,
     pub params: Vec<Param>,
@@ -281,6 +314,10 @@ impl Manifest {
 
     pub fn allows_history(&self, kind: HistoryKind) -> bool {
         self.history.contains(&kind)
+    }
+
+    pub fn allows_signals(&self, source: SignalSource) -> bool {
+        self.signals.contains(&source)
     }
 }
 
@@ -398,6 +435,8 @@ struct RawManifest {
     http: Vec<String>,
     #[serde(default)]
     history: Vec<String>,
+    #[serde(default)]
+    signals: Vec<String>,
     #[serde(default)]
     timer_ms: Option<u64>,
     #[serde(default)]
@@ -521,6 +560,33 @@ fn check(yaml: &str, terminal: Option<&semver::Version>) -> (Option<Manifest>, R
         }
     }
 
+    let mut signals = Vec::with_capacity(raw.signals.len());
+    for (i, source) in raw.signals.iter().enumerate() {
+        match SignalSource::parse(source) {
+            Some(source) if signals.contains(&source) => r.error(
+                Code::InvalidManifest,
+                format!("signals[{i}]"),
+                format!("`{}` is declared twice", source.as_str()),
+            ),
+            Some(source) => signals.push(source),
+            None => r.error(
+                Code::InvalidManifest,
+                format!("signals[{i}]"),
+                format!("`{source}` must be activity, density or prints"),
+            ),
+        }
+    }
+    if !signals.is_empty()
+        && let Some(required) = &min_terminal
+        && *required < ABI_1_1_TERMINAL
+    {
+        r.error(
+            Code::InvalidManifest,
+            "min_terminal",
+            format!("signals need min_terminal >= {ABI_1_1_TERMINAL}"),
+        );
+    }
+
     let timer_ms = raw.timer_ms.unwrap_or(DEFAULT_TIMER_MS);
     if !(MIN_TIMER_MS..=MAX_TIMER_MS).contains(&timer_ms) {
         r.error(
@@ -582,6 +648,7 @@ fn check(yaml: &str, terminal: Option<&semver::Version>) -> (Option<Manifest>, R
         min_terminal,
         http,
         history,
+        signals,
         timer: Duration::from_millis(timer_ms),
         columns,
         params,
@@ -1025,6 +1092,33 @@ limits: {memory_mb: 128}
             Code::InvalidManifest,
             "document order without a terminal"
         );
+    }
+
+    #[test]
+    fn signals_list_known_sources_once_and_need_abi_1_1() {
+        let yaml = |extra: &str| host_manifest(extra).replace("0.104.0", "0.104.72");
+        let manifest = Manifest::parse(&yaml("signals: [density, prints]\n")).unwrap();
+        assert_eq!(
+            manifest.signals,
+            [SignalSource::Density, SignalSource::Prints]
+        );
+        assert!(manifest.allows_signals(SignalSource::Density));
+        assert!(!manifest.allows_signals(SignalSource::Activity));
+
+        let report = Manifest::parse(&yaml("signals: [density, trades, density]\n")).unwrap_err();
+        assert_eq!(report.errors[0].path, "signals[1]");
+        assert!(
+            report.errors[0]
+                .message
+                .contains("activity, density or prints")
+        );
+        assert_eq!(report.errors[1].path, "signals[2]");
+        assert!(report.errors[1].message.contains("declared twice"));
+
+        let old = Manifest::parse(&host_manifest("signals: [activity]\n")).unwrap_err();
+        assert_eq!(old.errors[0].code, Code::InvalidManifest);
+        assert_eq!(old.errors[0].path, "min_terminal");
+        assert!(old.errors[0].message.contains("0.104.72"), "{old}");
     }
 
     #[test]
