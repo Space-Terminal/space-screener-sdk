@@ -115,13 +115,15 @@ pub struct Harness {
 }
 
 impl Harness {
-    /// Moderates the module ([`space_screener_check::inspect`]) and instantiates it.
+    /// Moderates the module ([`space_screener_check::inspect`], then
+    /// [`space_screener_check::check_imports`] against the manifest) and instantiates it.
     pub fn new(
         manifest: &Manifest,
         wasm: &[u8],
         source: Box<dyn Source>,
     ) -> Result<Self, HarnessError> {
         let info = space_screener_check::inspect(wasm).map_err(HarnessError::Invalid)?;
+        space_screener_check::check_imports(manifest, &info).map_err(HarnessError::Invalid)?;
         let manifest = Arc::new(manifest.clone());
         let shared: Shared = Shared::new(State::new(manifest.clone(), source));
         let pages = manifest.limits.memory_mb * (1024 * 1024 / PAGE_BYTES);

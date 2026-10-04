@@ -9,7 +9,7 @@ use cpu_time::ThreadTime;
 use extism::{CurrentPlugin, Function, PTR, UserData, Val};
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use space_screener_check::{ColumnType, HOST_FUNCTIONS, HistoryKind, Manifest};
+use space_screener_check::{ColumnType, HOST_FUNCTIONS, HistoryKind, Manifest, SignalSource};
 
 use crate::output::{Alert, Intent, LogLine, Output, Row, Stats, Status};
 use crate::source::{Source, err, ok};
@@ -20,6 +20,7 @@ pub const MAX_ROW_BYTES: usize = 16 * 1024;
 pub const MAX_BUFFER_BYTES: usize = 32 * 1024 * 1024;
 pub const KV_LIMIT_BYTES: usize = 1024 * 1024;
 pub const MAX_BATCH: usize = 1000;
+pub const MAX_OPEN_MARKETS: usize = 16;
 const ALERTS_PER_MINUTE: usize = 6;
 const MAX_ALERT_TITLE: usize = 200;
 const MAX_ALERT_BODY: usize = 1000;
@@ -265,6 +266,7 @@ impl State {
             "tickers" | "symbols" | "exchanges" => self.data(name, input),
             "history_cluster" => self.history(HistoryKind::Cluster, name, input),
             "history_replay" => self.history(HistoryKind::Replay, name, input),
+            "signals" => self.signals(input),
             "now_ms" => {
                 let now = self.now_ms;
                 self.source
@@ -296,6 +298,19 @@ impl State {
                 Value::Null
             })),
             "open_market" | "open_spread" => self.open(name, input),
+            "open_markets" => match parse::<OpenMarkets>(input) {
+                Ok(request) if (1..=MAX_OPEN_MARKETS).contains(&request.markets.len()) => {
+                    self.open(name, input)
+                }
+                Ok(request) => err(
+                    "bad_request",
+                    format!(
+                        "open_markets takes 1..={MAX_OPEN_MARKETS} markets, got {}",
+                        request.markets.len()
+                    ),
+                ),
+                Err(reply) => reply,
+            },
             "log" => reply(parse::<LogInput>(input).map(|line| {
                 self.host_log(&line.level, line.msg);
                 Value::Null
@@ -384,6 +399,21 @@ impl State {
             );
         }
         self.data(name, input)
+    }
+
+    fn signals(&mut self, input: &Value) -> Value {
+        let request = match parse::<SignalsInput>(input) {
+            Ok(request) => request,
+            Err(reply) => return reply,
+        };
+        if !self.manifest.allows_signals(request.source) {
+            let source = request.source.as_str();
+            return err(
+                "not_permitted",
+                format!("signals of {source} need `signals: [{source}]` in manifest.yaml"),
+            );
+        }
+        self.data("signals", input)
     }
 
     fn emit_rows(&mut self, mut request: EmitRows) -> Result<Value, Value> {
@@ -623,6 +653,16 @@ struct EmitRows {
 }
 
 #[derive(Deserialize)]
+struct SignalsInput {
+    source: SignalSource,
+}
+
+#[derive(Deserialize)]
+struct OpenMarkets {
+    markets: Vec<Value>,
+}
+
+#[derive(Deserialize)]
 struct Expire {
     keys: Vec<String>,
 }
@@ -652,7 +692,7 @@ struct LogInput {
 
 pub(crate) type Shared = UserData<State>;
 
-/// Every ABI v1 host function, bound to one state.
+/// Every ABI v1 host function, bound to one state; the module links the ones it imports.
 pub(crate) fn functions(shared: &Shared) -> Vec<Function> {
     HOST_FUNCTIONS
         .iter()
@@ -873,6 +913,56 @@ mod tests {
         let line = &s.output().logs[0].msg;
         assert!(line.len() <= MAX_LOG_LINE && line.len() > MAX_LOG_LINE - 4);
         assert!(line.chars().all(|c| c == 'ж'));
+    }
+
+    #[test]
+    fn signals_need_the_manifest_and_start_empty_offline() {
+        let mut s = state();
+        assert_eq!(
+            code(&s.call("signals", &json!({"source": "density"}))),
+            Some("not_permitted")
+        );
+        assert_eq!(
+            code(&s.call("signals", &json!({"source": "trades"}))),
+            Some("bad_request")
+        );
+        let manifest = Manifest::parse(
+            "abi: 1\nid: test.dens\nversion: 0.1.0\nname: {en: D}\nlang: rust\nmin_terminal: 0.104.72\n\
+             signals: [density]\ncolumns: [{key: d, type: usd}]\n",
+        )
+        .unwrap();
+        let mut s = State::new(Arc::new(manifest), Box::new(Offline));
+        assert_eq!(
+            s.call("signals", &json!({"source": "density", "since": 4})),
+            json!({"ok": {"seq": 0, "reset": true, "connected": false, "upserts": [], "removed": []}})
+        );
+        assert_eq!(s.stats.misses, 0);
+    }
+
+    #[test]
+    fn open_markets_takes_one_to_sixteen_markets_in_a_click() {
+        let mut s = state();
+        let market = json!({"exchange": "binance", "market": "futures", "symbol": "BTCUSDT"});
+        s.click = Some(false);
+        assert_eq!(
+            code(&s.call("open_markets", &json!({"markets": []}))),
+            Some("bad_request")
+        );
+        let many: Vec<Value> = (0..=MAX_OPEN_MARKETS).map(|_| market.clone()).collect();
+        assert_eq!(
+            code(&s.call("open_markets", &json!({ "markets": many }))),
+            Some("bad_request")
+        );
+        assert_eq!(
+            s.call("open_markets", &json!({"markets": [market, market]})),
+            json!({"ok": null})
+        );
+        assert_eq!(
+            code(&s.call("open_market", &market)),
+            Some("not_in_click"),
+            "one open per click"
+        );
+        assert_eq!(s.output().intents[0].kind, "open_markets");
     }
 
     #[test]

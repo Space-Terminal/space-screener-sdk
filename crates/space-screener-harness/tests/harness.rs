@@ -80,6 +80,28 @@ fn trial_offline_shows_rows_and_column_warnings() {
 }
 
 #[test]
+fn signals_need_a_new_enough_min_terminal_and_start_empty_offline() {
+    let wasm = plugin("(i32.const 0)", "signals", r#"{"source":"density"}"#, None);
+    let report = trial(&manifest(), &wasm, None);
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    assert!(
+        report.issues[0].contains("needs min_terminal >= 0.104.72"),
+        "{:?}",
+        report.issues
+    );
+
+    let manifest = Manifest::parse(&MANIFEST.replace(
+        "min_terminal: 0.104.0",
+        "min_terminal: 0.104.72\nsignals: [density]",
+    ))
+    .unwrap();
+    let mut harness = Harness::new(&manifest, &wasm, Box::new(Offline)).unwrap();
+    let outcome = harness.timer(1_000).unwrap();
+    assert!(outcome.is_ok(), "{outcome:?}");
+    assert_eq!(harness.output().unwrap().stats.misses, 0);
+}
+
+#[test]
 fn trap_in_init_fails_the_trial() {
     let wasm = plugin("(unreachable)", "emit_rows", ROWS, None);
     let report = trial(&manifest(), &wasm, None);
