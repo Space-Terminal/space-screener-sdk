@@ -70,10 +70,6 @@ mod raw {
     use crate::errors::{Error, Result};
 
     const READ_CHUNK: usize = 64 * 1024;
-    /// Replies above this are parsed in place: a signals snapshot weighs megabytes, and a copy
-    /// of it next to the parsed value and the plugin's previous state does not fit 64 MB.
-    /// Smaller ones are copied: parsing a slice is about twice as fast as a reader.
-    const COPY_MAX: usize = 1024 * 1024;
 
     /// Reads a host reply out of Extism memory, chunk by chunk.
     struct HostReader {
@@ -93,26 +89,36 @@ mod raw {
         }
     }
 
-    // Input and output are freed right away: Extism would otherwise keep them until the
-    // export returns.
-    pub(super) fn call<O: DeserializeOwned>(f: HostFn, input: String) -> Result<O> {
+    // Input and output are freed right away: a batch answer can weigh megabytes and
+    // Extism would otherwise keep it until the export returns.
+    fn send(f: HostFn, input: String) -> Result<Memory> {
         let mem =
             Memory::from_bytes(input.as_bytes()).map_err(|e| Error::Call(format!("{e:#}")))?;
         let offs = mem.offset();
         // SAFETY: every import takes one Extism memory offset holding UTF-8 JSON and returns one.
         let out_offs = unsafe { f(offs) };
         mem.free();
-        let out =
-            Memory::find(out_offs).ok_or_else(|| Error::Call("host returned no output".into()))?;
-        let parsed = if out.len() <= COPY_MAX {
-            serde_json::from_slice(&out.to_vec())
-        } else {
-            let reader = HostReader {
-                offs: out.offset(),
-                left: out.len(),
-            };
-            serde_json::from_reader(BufReader::with_capacity(READ_CHUNK, reader))
+        Memory::find(out_offs).ok_or_else(|| Error::Call("host returned no output".into()))
+    }
+
+    pub(super) fn call(f: HostFn, input: String) -> Result<String> {
+        let out = send(f, input)?;
+        let bytes = out.to_vec();
+        out.free();
+        String::from_utf8(bytes).map_err(|e| Error::Call(e.to_string()))
+    }
+
+    /// Parses the reply in place, without a copy: a signals snapshot weighs megabytes, and a
+    /// copy of it next to the parsed value and the plugin's previous snapshot does not fit
+    /// 64 MB. Only for `signals`: a reader parses the long strings of HTTP bodies about
+    /// 2.4 times slower than a copied slice.
+    pub(super) fn call_in_place<O: DeserializeOwned>(f: HostFn, input: String) -> Result<O> {
+        let out = send(f, input)?;
+        let reader = HostReader {
+            offs: out.offset(),
+            left: out.len(),
         };
+        let parsed = serde_json::from_reader(BufReader::with_capacity(READ_CHUNK, reader));
         out.free();
         Ok(parsed?)
     }
@@ -125,7 +131,11 @@ mod raw {
     use super::HostFn;
     use crate::errors::{Error, Result};
 
-    pub(super) fn call<O: DeserializeOwned>(_: HostFn, _: String) -> Result<O> {
+    pub(super) fn call(_: HostFn, _: String) -> Result<String> {
+        Err(Error::NotInTerminal)
+    }
+
+    pub(super) fn call_in_place<O: DeserializeOwned>(_: HostFn, _: String) -> Result<O> {
         Err(Error::NotInTerminal)
     }
 }
@@ -189,7 +199,12 @@ struct EmitRows<'a> {
 }
 
 fn call<I: Serialize + ?Sized, O: DeserializeOwned>(f: HostFn, input: &I) -> Result<O> {
-    raw::call::<Envelope<O>>(f, serde_json::to_string(input)?)?.into_result()
+    let out = raw::call(f, serde_json::to_string(input)?)?;
+    serde_json::from_str::<Envelope<O>>(&out)?.into_result()
+}
+
+fn call_in_place<I: Serialize + ?Sized, O: DeserializeOwned>(f: HostFn, input: &I) -> Result<O> {
+    raw::call_in_place::<Envelope<O>>(f, serde_json::to_string(input)?)?.into_result()
 }
 
 pub fn http(req: &HttpRequest) -> Result<HttpResponse> {
@@ -344,7 +359,7 @@ pub fn open_spread(a: &MarketRef, b: &MarketRef, layout: Option<SpreadLayout>) -
 /// Needs the source in `signals` of manifest.yaml and terminal 0.104.72 or newer; see
 /// [`crate::SignalFeed`] for a ready cursor.
 pub fn signals(source: SignalSource, since: Option<u64>) -> Result<SignalsDelta> {
-    call(import::signals, &SignalsRequest { source, since })
+    call_in_place(import::signals, &SignalsRequest { source, since })
 }
 
 /// Best effort: a failed log call is dropped.
