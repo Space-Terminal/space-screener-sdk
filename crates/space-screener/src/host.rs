@@ -4,33 +4,60 @@ use serde_json::{Value, json};
 
 use crate::abi::{
     AlertLevel, ClusterHistory, ClusterRequest, ExchangeInfo, HttpRequest, HttpResponse, LogLevel,
-    Market, MarketRef, ReplayRequest, SpreadLayout, StatusTone, SymbolInfo, TickerSnapshot,
+    Market, MarketRef, ReplayRequest, SmartLevel, SpreadLayout, StatusTone, SymbolInfo,
+    TickerSnapshot,
 };
 use crate::errors::{HostError, Result};
 use crate::row::Row;
+use crate::signals::{SignalSource, SignalsDelta};
 
 pub const HTTP_BATCH_MAX: usize = 1000;
+/// Markets one [`open_markets`] call may open.
+pub const OPEN_MARKETS_MAX: usize = 16;
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum HostFn {
-    Http,
-    HttpBatch,
-    Tickers,
-    Symbols,
-    Exchanges,
-    HistoryCluster,
-    HistoryReplay,
-    KvGet,
-    KvSet,
-    EmitRows,
-    Expire,
-    EmitAlert,
-    SetStatus,
-    OpenMarket,
-    OpenSpread,
-    Log,
-    NowMs,
+/// Each wrapper passes its own import to `raw::call`, so a plugin imports only the host
+/// functions it calls: a function newer than the plugin's `min_terminal` would make older
+/// terminals refuse the whole module.
+macro_rules! host_imports {
+    ($($name:ident),* $(,)?) => {
+        #[cfg(target_arch = "wasm32")]
+        mod import {
+            #[link(wasm_import_module = "extism:host/user")]
+            unsafe extern "C" {
+                $(pub(super) fn $name(input: u64) -> u64;)*
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        mod import {
+            $(pub(super) unsafe extern "C" fn $name(_: u64) -> u64 { 0 })*
+        }
+    };
 }
+
+host_imports!(
+    http,
+    http_batch,
+    tickers,
+    symbols,
+    exchanges,
+    history_cluster,
+    history_replay,
+    kv_get,
+    kv_set,
+    emit_rows,
+    expire,
+    emit_alert,
+    set_status,
+    open_market,
+    open_markets,
+    open_spread,
+    signals,
+    log,
+    now_ms,
+);
+
+type HostFn = unsafe extern "C" fn(u64) -> u64;
 
 #[cfg(target_arch = "wasm32")]
 mod raw {
@@ -39,27 +66,6 @@ mod raw {
     use super::HostFn;
     use crate::errors::{Error, Result};
 
-    #[link(wasm_import_module = "extism:host/user")]
-    unsafe extern "C" {
-        fn http(input: u64) -> u64;
-        fn http_batch(input: u64) -> u64;
-        fn tickers(input: u64) -> u64;
-        fn symbols(input: u64) -> u64;
-        fn exchanges(input: u64) -> u64;
-        fn history_cluster(input: u64) -> u64;
-        fn history_replay(input: u64) -> u64;
-        fn kv_get(input: u64) -> u64;
-        fn kv_set(input: u64) -> u64;
-        fn emit_rows(input: u64) -> u64;
-        fn expire(input: u64) -> u64;
-        fn emit_alert(input: u64) -> u64;
-        fn set_status(input: u64) -> u64;
-        fn open_market(input: u64) -> u64;
-        fn open_spread(input: u64) -> u64;
-        fn log(input: u64) -> u64;
-        fn now_ms(input: u64) -> u64;
-    }
-
     // Input and output are freed right away: a batch answer can weigh megabytes and
     // Extism would otherwise keep it until the export returns.
     pub(super) fn call(f: HostFn, input: String) -> Result<String> {
@@ -67,27 +73,7 @@ mod raw {
             Memory::from_bytes(input.as_bytes()).map_err(|e| Error::Call(format!("{e:#}")))?;
         let offs = mem.offset();
         // SAFETY: every import takes one Extism memory offset holding UTF-8 JSON and returns one.
-        let out_offs = unsafe {
-            match f {
-                HostFn::Http => http(offs),
-                HostFn::HttpBatch => http_batch(offs),
-                HostFn::Tickers => tickers(offs),
-                HostFn::Symbols => symbols(offs),
-                HostFn::Exchanges => exchanges(offs),
-                HostFn::HistoryCluster => history_cluster(offs),
-                HostFn::HistoryReplay => history_replay(offs),
-                HostFn::KvGet => kv_get(offs),
-                HostFn::KvSet => kv_set(offs),
-                HostFn::EmitRows => emit_rows(offs),
-                HostFn::Expire => expire(offs),
-                HostFn::EmitAlert => emit_alert(offs),
-                HostFn::SetStatus => set_status(offs),
-                HostFn::OpenMarket => open_market(offs),
-                HostFn::OpenSpread => open_spread(offs),
-                HostFn::Log => log(offs),
-                HostFn::NowMs => now_ms(offs),
-            }
-        };
+        let out_offs = unsafe { f(offs) };
         mem.free();
         let out =
             Memory::find(out_offs).ok_or_else(|| Error::Call("host returned no output".into()))?;
@@ -127,6 +113,25 @@ impl<T: DeserializeOwned> Envelope<T> {
 }
 
 #[derive(Serialize)]
+struct OpenMarket<'a> {
+    #[serde(flatten)]
+    market: &'a MarketRef,
+    smart_level: &'a SmartLevel,
+}
+
+#[derive(Serialize)]
+struct OpenMarkets<'a> {
+    markets: &'a [MarketRef],
+}
+
+#[derive(Serialize)]
+struct SignalsRequest {
+    source: SignalSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    since: Option<u64>,
+}
+
+#[derive(Serialize)]
 struct OpenSpread<'a> {
     a: &'a MarketRef,
     b: &'a MarketRef,
@@ -152,7 +157,7 @@ fn call<I: Serialize + ?Sized, O: DeserializeOwned>(f: HostFn, input: &I) -> Res
 }
 
 pub fn http(req: &HttpRequest) -> Result<HttpResponse> {
-    call(HostFn::Http, req)
+    call(import::http, req)
 }
 
 /// Runs requests concurrently on the host (quotas still apply); results keep the request order.
@@ -160,7 +165,7 @@ pub fn http_batch(reqs: &[HttpRequest]) -> Result<Vec<Result<HttpResponse>>> {
     let mut all = Vec::with_capacity(reqs.len());
     for chunk in reqs.chunks(HTTP_BATCH_MAX) {
         let items: Vec<Envelope<HttpResponse>> =
-            call(HostFn::HttpBatch, &HttpBatch { requests: chunk })?;
+            call(import::http_batch, &HttpBatch { requests: chunk })?;
         all.extend(items.into_iter().map(Envelope::into_result));
     }
     Ok(all)
@@ -168,33 +173,33 @@ pub fn http_batch(reqs: &[HttpRequest]) -> Result<Vec<Result<HttpResponse>>> {
 
 pub fn tickers(exchange: &str, market: Market) -> Result<TickerSnapshot> {
     call(
-        HostFn::Tickers,
+        import::tickers,
         &json!({ "exchange": exchange, "market": market }),
     )
 }
 
 pub fn symbols(exchange: &str, market: Market) -> Result<Vec<SymbolInfo>> {
     call(
-        HostFn::Symbols,
+        import::symbols,
         &json!({ "exchange": exchange, "market": market }),
     )
 }
 
 pub fn exchanges() -> Result<Vec<ExchangeInfo>> {
-    call(HostFn::Exchanges, &Value::Null)
+    call(import::exchanges, &Value::Null)
 }
 
 pub fn history_cluster(req: &ClusterRequest) -> Result<ClusterHistory> {
-    call(HostFn::HistoryCluster, req)
+    call(import::history_cluster, req)
 }
 
 /// The replay chunk shape follows the terminal's cloud replay and is not frozen in ABI v1.
 pub fn history_replay(req: &ReplayRequest) -> Result<Value> {
-    call(HostFn::HistoryReplay, req)
+    call(import::history_replay, req)
 }
 
 pub fn kv_get<T: DeserializeOwned>(key: &str) -> Result<Option<T>> {
-    let value: Value = call(HostFn::KvGet, &json!({ "key": key }))?;
+    let value: Value = call(import::kv_get, &json!({ "key": key }))?;
     match value {
         Value::Null => Ok(None),
         v => Ok(Some(serde_json::from_value(v)?)),
@@ -202,18 +207,18 @@ pub fn kv_get<T: DeserializeOwned>(key: &str) -> Result<Option<T>> {
 }
 
 pub fn kv_set<T: Serialize + ?Sized>(key: &str, value: &T) -> Result<()> {
-    call(HostFn::KvSet, &json!({ "key": key, "value": value }))
+    call(import::kv_set, &json!({ "key": key, "value": value }))
 }
 
 pub fn kv_delete(key: &str) -> Result<()> {
-    call(HostFn::KvSet, &json!({ "key": key, "value": Value::Null }))
+    call(import::kv_set, &json!({ "key": key, "value": Value::Null }))
 }
 
 /// Upserts rows by `key`; rows not mentioned stay.
 pub fn emit_rows(rows: impl IntoIterator<Item = Row>) -> Result<()> {
     let rows: Vec<Row> = rows.into_iter().collect();
     call(
-        HostFn::EmitRows,
+        import::emit_rows,
         &EmitRows {
             rows: &rows,
             replace: false,
@@ -225,7 +230,7 @@ pub fn emit_rows(rows: impl IntoIterator<Item = Row>) -> Result<()> {
 pub fn replace_rows(rows: impl IntoIterator<Item = Row>) -> Result<()> {
     let rows: Vec<Row> = rows.into_iter().collect();
     call(
-        HostFn::EmitRows,
+        import::emit_rows,
         &EmitRows {
             rows: &rows,
             replace: true,
@@ -235,12 +240,12 @@ pub fn replace_rows(rows: impl IntoIterator<Item = Row>) -> Result<()> {
 
 pub fn expire<K: Into<String>>(keys: impl IntoIterator<Item = K>) -> Result<()> {
     let keys: Vec<String> = keys.into_iter().map(Into::into).collect();
-    call(HostFn::Expire, &json!({ "keys": keys }))
+    call(import::expire, &json!({ "keys": keys }))
 }
 
 pub fn alert(level: AlertLevel, title: impl Into<String>, body: impl Into<String>) -> Result<()> {
     call(
-        HostFn::EmitAlert,
+        import::emit_alert,
         &json!({ "level": level, "title": title.into(), "body": body.into() }),
     )
 }
@@ -252,7 +257,7 @@ pub fn alert_row(
     row_key: impl Into<String>,
 ) -> Result<()> {
     call(
-        HostFn::EmitAlert,
+        import::emit_alert,
         &json!({
             "level": level,
             "title": title.into(),
@@ -264,28 +269,54 @@ pub fn alert_row(
 
 pub fn set_status(tone: StatusTone, text: impl Into<String>) -> Result<()> {
     call(
-        HostFn::SetStatus,
+        import::set_status,
         &json!({ "text": text.into(), "tone": tone }),
     )
 }
 
 /// Only valid inside `on_click`; at most one open per click.
 pub fn open_market(market: &MarketRef) -> Result<()> {
-    call(HostFn::OpenMarket, market)
+    call(import::open_market, market)
+}
+
+/// Opens the market and places a smart level at the price of a density signal (its exact
+/// price and live metrics come from the terminal). Only valid inside `on_click`; at most one
+/// open per click. Needs terminal 0.104.72 or newer: an older one ignores the level.
+pub fn open_market_with_level(market: &MarketRef, level: &SmartLevel) -> Result<()> {
+    call(
+        import::open_market,
+        &OpenMarket {
+            market,
+            smart_level: level,
+        },
+    )
+}
+
+/// Opens 1..=[`OPEN_MARKETS_MAX`] markets at once. Only valid inside `on_click`; at most one
+/// open per click. Needs terminal 0.104.72 or newer.
+pub fn open_markets(markets: &[MarketRef]) -> Result<()> {
+    call(import::open_markets, &OpenMarkets { markets })
 }
 
 /// Only valid inside `on_click`; at most one open per click.
 pub fn open_spread(a: &MarketRef, b: &MarketRef, layout: Option<SpreadLayout>) -> Result<()> {
-    call(HostFn::OpenSpread, &OpenSpread { a, b, layout })
+    call(import::open_spread, &OpenSpread { a, b, layout })
+}
+
+/// Signals of `source` changed after `since` (`None`: the whole snapshot, `reset` is set).
+/// Needs the source in `signals` of manifest.yaml and terminal 0.104.72 or newer; see
+/// [`crate::SignalFeed`] for a ready cursor.
+pub fn signals(source: SignalSource, since: Option<u64>) -> Result<SignalsDelta> {
+    call(import::signals, &SignalsRequest { source, since })
 }
 
 /// Best effort: a failed log call is dropped.
 pub fn log(level: LogLevel, msg: impl Into<String>) {
-    let _ = call::<_, ()>(HostFn::Log, &json!({ "level": level, "msg": msg.into() }));
+    let _ = call::<_, ()>(import::log, &json!({ "level": level, "msg": msg.into() }));
 }
 
 pub fn now_ms() -> Result<i64> {
-    call(HostFn::NowMs, &Value::Null)
+    call(import::now_ms, &Value::Null)
 }
 
 #[cfg(test)]
@@ -334,6 +365,28 @@ mod tests {
         })
         .unwrap();
         assert!(json.get("layout").is_none());
+    }
+
+    #[test]
+    fn open_market_with_level_flattens_the_market() {
+        let market = MarketRef::new("binance", Market::Futures, "BTCUSDT");
+        let level = SmartLevel::new("d1").with_sound(true);
+        let json = serde_json::to_value(OpenMarket {
+            market: &market,
+            smart_level: &level,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            json!({"exchange": "binance", "market": "futures", "symbol": "BTCUSDT",
+                   "smart_level": {"signal_id": "d1", "sound": true}})
+        );
+        let request = serde_json::to_value(SignalsRequest {
+            source: SignalSource::Prints,
+            since: None,
+        })
+        .unwrap();
+        assert_eq!(request, json!({"source": "prints"}));
     }
 
     #[test]

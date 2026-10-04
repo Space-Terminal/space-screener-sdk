@@ -12,12 +12,13 @@ pub mod oi;
 mod params;
 mod row;
 mod series;
+mod signals;
 
 pub use abi::{
     AlertLevel, Click, ClickRow, ClusterCell, ClusterHistory, ClusterRequest, ExchangeInfo,
     ExchangeMarket, HttpRequest, HttpResponse, Lang, LogLevel, Market, MarketRef, Method,
-    Modifiers, MouseButton, ReplayRequest, SpreadLayout, StatusTone, SymbolInfo, Ticker,
-    TickerSnapshot,
+    Modifiers, MouseButton, ReplayRequest, SmartLevel, SpreadLayout, StatusTone, SymbolInfo,
+    Ticker, TickerSnapshot,
 };
 pub use errors::{BoxError, Error, Result};
 #[doc(hidden)]
@@ -26,6 +27,10 @@ pub use export::{Init, Screener, ScreenerResult, lang, params, terminal_version}
 pub use params::Params;
 pub use row::{Cell, CellValue, Row, Tone};
 pub use series::{Series, hours, mins, secs};
+pub use signals::{
+    ActivitySignal, ActivityTag, BookSide, DensityEvent, DensitySignal, DensityStatus, FeedUpdate,
+    PrintsSignal, Signal, SignalFeed, SignalSource, SignalsDelta, TradeSide,
+};
 
 #[macro_export]
 macro_rules! debug {
@@ -50,12 +55,13 @@ macro_rules! error {
 pub mod prelude {
     pub use crate::host::{
         alert, alert_row, emit_rows, exchanges, expire, history_cluster, history_replay, http,
-        http_batch, kv_delete, kv_get, kv_set, now_ms, open_market, open_spread, replace_rows,
-        set_status, symbols, tickers,
+        http_batch, kv_delete, kv_get, kv_set, now_ms, open_market, open_market_with_level,
+        open_markets, open_spread, replace_rows, set_status, signals, symbols, tickers,
     };
     pub use crate::{
         AlertLevel, BoxError, Cell, Click, ExchangeMarket, HttpRequest, HttpResponse, Init, Lang,
-        Market, MarketRef, Params, Row, Screener, ScreenerResult, Series, SpreadLayout, StatusTone,
-        Tone, debug, error, export_screener, hours, info, lang, mins, params, secs, warn,
+        Market, MarketRef, Params, Row, Screener, ScreenerResult, Series, Signal, SignalFeed,
+        SignalSource, SmartLevel, SpreadLayout, StatusTone, Tone, debug, error, export_screener,
+        hours, info, lang, mins, params, secs, warn,
     };
 }
