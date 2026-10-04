@@ -91,7 +91,7 @@ description: {ru: "...", en: "..."}     # optional
 lang: rust                              # required: rust | ts
 categories: [open-interest]             # catalog only, see below
 source: https://github.com/me/oi        # catalog only, optional
-min_terminal: 0.104.70                  # required, semver; an older terminal refuses: terminal_too_old
+min_terminal: 0.104.72                  # required, semver; an older terminal refuses: terminal_too_old
 http: [fapi.binance.com, api.bybit.com] # exact host names http() may call, https only
 history: [cluster, replay]              # optional, cloud history access
 signals: [density]                      # optional (v1.1): activity | density | prints, see Signals
@@ -273,7 +273,8 @@ SignalsDelta {"seq": 1842, "reset": false, "connected": true,
 - Without `since` (or with `0`, a cursor older than the terminal keeps, or after the terminal restarted
   the feed) the reply has `reset: true` and `upserts` is the whole current snapshot. Otherwise
   `upserts` holds the signals changed after `since` (latest version of each) and `removed` the ids
-  dropped after it. Pass `seq` as the next `since`. `SignalFeed` (Rust and TypeScript PDK) does this.
+  dropped after it. An id is never in both `upserts` and `removed` of one reply. Pass `seq` as the
+  next `since`. `SignalFeed` (Rust and TypeScript PDK) does this.
 - `connected`: the terminal has fresh data from the aggregator for this source.
 - `unavailable`: this build of the terminal does not provide the source (`activity` and `prints` come
   with the Pro build).
@@ -331,6 +332,7 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 - `smart_level` of `open_market` (v1.1) also places a smart level in the opened order book at the price
   of the density signal `signal_id` (the terminal takes the exact price and live metrics from its own
   buffer; an unknown id opens the market without a level). `sound` alerts on touches and fills.
+  A terminal older than 0.104.72 ignores `smart_level` and opens the market without a level.
   Plain row clicks need neither: without an `on_click` export the terminal opens the row's market.
   The terminal routes the market to the pane's link group or a new order book, like its own screeners.
 

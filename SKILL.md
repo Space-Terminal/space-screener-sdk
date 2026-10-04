@@ -225,7 +225,7 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | history (5/15 min changes) resets | every `st dev` reinstall and every crash restarts the plugin; windows fill again from scratch |
 | clicks feel slow | do not export `on_click` unless needed — without it the terminal opens the row's market at once |
 | `not_in_click` | `open_market` only from `on_click` exported with `export_screener!(T, on_click)` |
-| `invalid_manifest: min_terminal: the module imports `signals`` | v1.1 calls (`signals`, `open_markets`) need `min_terminal: 0.104.72` |
+| `invalid_manifest: min_terminal: the module imports signals` | v1.1 calls (`signals`, `open_markets`) need `min_terminal: 0.104.72` |
 | plugin restarts, `st logs` shows `panic: …` | fix the panic at the logged location (index out of bounds, `unwrap` on `None`, …) |
 | numbers as strings in exchange JSON | parse strings (`"83890.5".parse::<f64>()`) or deserialize with a string-or-number helper |
 | `st test` shows `N not recorded` | the code now calls data functions with inputs the recording does not have (another URL, symbol or exchange): record again |

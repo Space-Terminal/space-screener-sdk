@@ -249,7 +249,8 @@ export const setStatus = (tone: StatusTone, text: string): void => call("set_sta
 /** Only inside on_click, once per click. */
 export const openMarket = (market: MarketRef): void => call("open_market", market);
 /** Opens the market and places a smart level at a density signal's price. Only inside
- * on_click, once per click; min_terminal 0.104.72. */
+ * on_click, once per click. A terminal older than 0.104.72 ignores the level and opens the
+ * market without it. */
 export const openMarketWithLevel = (market: MarketRef, level: SmartLevel): void =>
   call("open_market", { ...market, smart_level: level });
 /** 1..16 markets at once. Only inside on_click, once per click; min_terminal 0.104.72. */

@@ -281,7 +281,8 @@ pub fn open_market(market: &MarketRef) -> Result<()> {
 
 /// Opens the market and places a smart level at the price of a density signal (its exact
 /// price and live metrics come from the terminal). Only valid inside `on_click`; at most one
-/// open per click. Needs terminal 0.104.72 or newer: an older one ignores the level.
+/// open per click. A terminal older than 0.104.72 ignores the level and opens the market
+/// without it.
 pub fn open_market_with_level(market: &MarketRef, level: &SmartLevel) -> Result<()> {
     call(
         import::open_market,
