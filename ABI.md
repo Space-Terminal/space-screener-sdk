@@ -275,7 +275,9 @@ SignalsDelta {"seq": 1842, "reset": false, "connected": true,
   `upserts` holds the signals changed after `since` (latest version of each) and `removed` the ids
   dropped after it. An id is never in both `upserts` and `removed` of one reply. Pass `seq` as the
   next `since`. `SignalFeed` (Rust and TypeScript PDK) does this.
-- `connected`: the terminal has fresh data from the aggregator for this source.
+- `connected`: the terminal's connection to the aggregator for this source is alive — data or a
+  server keepalive within the last 90 s. A sparse source (`activity`) can stay silent for long
+  while `connected` is `true`.
 - `unavailable`: this build of the terminal does not provide the source (`activity` and `prints` come
   with the Pro build).
 - A density snapshot can hold up to ~20000 signals: filter before `emit_rows` (10000 rows at most).

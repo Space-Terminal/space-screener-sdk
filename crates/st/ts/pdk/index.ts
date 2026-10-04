@@ -154,6 +154,10 @@ export interface SignalsDelta {
   seq: number;
   /** `upserts` is the whole current snapshot: drop everything else. */
   reset: boolean;
+  /**
+   * The terminal's connection to the aggregator for this source is alive: data or a server
+   * keepalive within the last 90 s. A sparse source can stay silent for long while it is `true`.
+   */
   connected: boolean;
   upserts: Signal[];
   removed: string[];
@@ -353,6 +357,7 @@ export class Series {
 /** The current signals of one source, kept in sync with the terminal: call `poll()` in on_timer. */
 export class SignalFeed {
   readonly signals = new Map<string, Signal>();
+  /** `connected` of the last poll: the connection is alive, not that new signals arrived. */
   connected = false;
   private seq = 0;
   constructor(readonly source: SignalSource) {}

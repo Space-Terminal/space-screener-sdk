@@ -198,7 +198,8 @@ pub struct SignalsDelta {
     /// `upserts` is the whole current snapshot: drop everything else.
     #[serde(default)]
     pub reset: bool,
-    /// The terminal has live data from the aggregator for this source.
+    /// The terminal's connection to the aggregator for this source is alive: data or a server
+    /// keepalive within the last 90 s. A sparse source can stay silent for long while it is `true`.
     #[serde(default)]
     pub connected: bool,
     #[serde(default)]
@@ -282,6 +283,8 @@ impl SignalFeed {
         self.source
     }
 
+    /// `connected` of the last poll: the connection to the aggregator is alive (data or a
+    /// keepalive within 90 s), not that new signals arrived.
     pub fn connected(&self) -> bool {
         self.connected
     }
