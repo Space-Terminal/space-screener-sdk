@@ -4,6 +4,8 @@ use space_screener::prelude::*;
 use space_screener::{BookSide, DensitySignal, DensityStatus};
 
 const BLACKLIST: &str = "blacklist";
+/// Favourite levels of 0.1.0; favourites are the terminal's since 0.1.1.
+const LEGACY_FAVORITES: &str = "favorites";
 /// Rows above this with a full snapshot (~20000 levels) do not fit the plugin's memory.
 const ROWS_MAX: i64 = 5000;
 
@@ -269,6 +271,9 @@ impl Density {
 impl Screener for Density {
     fn init(&mut self, _init: &Init) -> ScreenerResult {
         self.curation = Curation::load();
+        if let Err(e) = kv_delete(LEGACY_FAVORITES) {
+            warn!("density: cannot drop the 0.1.0 favourites: {e}");
+        }
         Ok(())
     }
 
