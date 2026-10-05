@@ -1,10 +1,10 @@
 abi: 1
 id: space.density
-version: 0.1.0
+version: 0.1.1
 name: {ru: "Density", en: "Density"}
 description:
-  ru: "Крупные заявки (плотности) в стаканах бирж в реальном времени от сервера Space: биржа, тикер, сторона, цена, текущий и начальный объём в долларах, сколько съедено, дистанция до цены, сколько живёт и сколько было касаний. Клик открывает стакан и ставит на цене плотности умный уровень с её живыми метриками (выключается в параметрах); ★ — в избранное, ⊘ — инструмент в чёрный список"
-  en: "Large resting orders (densities) in exchange order books, live from the Space server: exchange, symbol, side, price, the dollar size now and at the start, how much is eaten, the distance to the price, how long it lives and how many times the price touched it. A click opens the order book and places a smart level at the density's price with its live metrics (can be turned off in the parameters); ★ pins a level, ⊘ blacklists the instrument"
+  ru: "Крупные заявки (плотности) в стаканах бирж в реальном времени от сервера Space: биржа, тикер, сторона, цена, текущий и начальный объём в долларах, сколько съедено, дистанция до цены, сколько живёт и сколько было касаний. Клик открывает стакан и ставит на цене плотности умный уровень с её живыми метриками (выключается в параметрах); ⊘ — инструмент в чёрный список"
+  en: "Large resting orders (densities) in exchange order books, live from the Space server: exchange, symbol, side, price, the dollar size now and at the start, how much is eaten, the distance to the price, how long it lives and how many times the price touched it. A click opens the order book and places a smart level at the density's price with its live metrics (can be turned off in the parameters); ⊘ blacklists the instrument"
 lang: rust
 categories: [orderbook]
 source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/density
@@ -12,7 +12,6 @@ min_terminal: 0.104.72
 signals: [density]
 timer_ms: 1000
 columns:
-  - {key: fav, type: text, title: {ru: "★", en: "★"}, width: 28}
   - {key: ban, type: text, title: {ru: "⊘", en: "⊘"}, width: 28}
   - {key: time, type: time, title: {ru: "Время", en: "Time"}, sort: desc}
   - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
