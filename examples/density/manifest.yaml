@@ -8,7 +8,7 @@ description:
 lang: rust
 categories: [orderbook]
 source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/density
-min_terminal: 0.104.72
+min_terminal: 0.104.73
 signals: [density]
 timer_ms: 1000
 columns:
