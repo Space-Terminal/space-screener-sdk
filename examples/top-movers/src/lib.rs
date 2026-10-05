@@ -85,6 +85,12 @@ impl Screener for TopMovers {
                 let Some(series) = self.prices.get_mut(key.as_str()) else {
                     continue;
                 };
+                // After a pause longer than the window (exchange offline, market switched back
+                // and forth) the last point would measure the whole pause: start over, the
+                // ticker warms up again.
+                if series.last_ts().is_some_and(|last| ts - last > WINDOW_MS) {
+                    *series = Series::new(WINDOW_MS + mins(1));
+                }
                 let past = series.value_at(ts - WINDOW_MS);
                 if series.last_ts().is_none_or(|last| ts - last >= SAMPLE_MS) {
                     series.push(ts, t.last);

@@ -129,7 +129,11 @@ export function on_timer(input: TimerInput) {
       if (t.volume_quote < minVolume) continue;
       const key = `${ex.exchange}:${market}:${t.symbol}`;
       let series = volumes.get(key);
-      if (!series) {
+      const seenTs = series?.lastTs();
+      // After a pause longer than the window (exchange offline, market switched back and forth)
+      // the last point would measure the whole pause: start over, the ticker warms up again and
+      // alerts from its second computed round.
+      if (!series || (seenTs !== undefined && ts - seenTs > windowMs)) {
         series = new Series(horizonMs);
         volumes.set(key, series);
       }
