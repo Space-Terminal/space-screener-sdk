@@ -7,15 +7,6 @@ const BLACKLIST: &str = "blacklist";
 /// Rows above this with a full snapshot (~20000 levels) do not fit the plugin's memory.
 const ROWS_MAX: i64 = 5000;
 
-/// Comma- or space-separated exchange slugs, lower case.
-fn slugs(text: Option<&str>) -> Vec<String> {
-    text.unwrap_or_default()
-        .split([',', ';', ' '])
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 /// Exchange, symbol and market of a level: the blacklist hides an instrument, not one price.
 fn instrument(signal: &Signal, density: &DensitySignal) -> String {
     format!("{}:{}:{}", density.exchange, density.market, signal.symbol)
@@ -24,9 +15,6 @@ fn instrument(signal: &Signal, density: &DensitySignal) -> String {
 #[derive(Debug, Clone, PartialEq)]
 struct Filter {
     search: String,
-    include: Vec<String>,
-    exclude: Vec<String>,
-    market: Option<Market>,
     side: Option<BookSide>,
     hide_dead: bool,
     min_current: f64,
@@ -50,13 +38,6 @@ impl Filter {
                 .unwrap_or_default()
                 .trim()
                 .to_ascii_uppercase(),
-            include: slugs(params.str("exchanges")),
-            exclude: slugs(params.str("exclude_exchanges")),
-            market: match params.str("market") {
-                Some("spot") => Some(Market::Spot),
-                Some("futures") => Some(Market::Futures),
-                _ => None,
-            },
             side: match params.str("side") {
                 Some("bid") => Some(BookSide::Bid),
                 Some("ask") => Some(BookSide::Ask),
@@ -81,9 +62,6 @@ impl Filter {
             _ => true,
         };
         (self.search.is_empty() || signal.symbol.contains(&self.search))
-            && self.market.is_none_or(|m| m == d.market)
-            && (self.include.is_empty() || self.include.contains(&d.exchange))
-            && !self.exclude.contains(&d.exchange)
             && self.side.is_none_or(|s| s == d.side)
             && !(self.hide_dead && d.status == DensityStatus::Dead)
             && d.notional_current_usd >= self.min_current
@@ -383,12 +361,8 @@ mod tests {
         let s = level("d", 1, "alive", Some(100000.0));
         let d = s.density.as_ref().unwrap();
         assert!(filter(json!({})).passes(&s, d));
-        assert!(
-            filter(json!({"side": "bid", "market": "futures", "exchanges": "binance"}))
-                .passes(&s, d)
-        );
+        assert!(filter(json!({"side": "bid"})).passes(&s, d));
         assert!(!filter(json!({"side": "ask"})).passes(&s, d));
-        assert!(!filter(json!({"exclude_exchanges": "Binance"})).passes(&s, d));
         assert!(filter(json!({"max_distance": 0.5})).passes(&s, d));
         assert!(!filter(json!({"max_distance": 0.3})).passes(&s, d));
         assert!(!filter(json!({"max_eaten": 30})).passes(&s, d));

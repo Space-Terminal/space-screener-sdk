@@ -28,9 +28,6 @@ columns:
   - {key: touches, type: integer, title: {ru: "Касания", en: "Touches"}}
 params:
   - {key: search, type: text, title: {ru: "Тикер содержит", en: "Symbol contains"}, default: ""}
-  - {key: exchanges, type: text, title: {ru: "Только биржи (через запятую, пусто — все)", en: "Only exchanges (comma-separated, empty — all)"}, default: ""}
-  - {key: exclude_exchanges, type: text, title: {ru: "Скрыть биржи", en: "Hide exchanges"}, default: ""}
-  - {key: market, type: select, title: {ru: "Рынок", en: "Market"}, default: both, options: [both, spot, futures]}
   - {key: side, type: select, title: {ru: "Сторона", en: "Side"}, default: both, options: [both, bid, ask]}
   - {key: hide_dead, type: bool, title: {ru: "Скрыть мёртвые", en: "Hide dead"}, default: false}
   - {key: min_current, type: number, title: {ru: "Мин. текущий объём, $", en: "Min current size, $"}, default: 0, min: 0}
@@ -42,7 +39,7 @@ params:
   - {key: avg_multiplier, type: number, title: {ru: "Текущий / средний ≥ (0 — выключено)", en: "Current / average ≥ (0 — off)"}, default: 1, min: 0}
   - {key: smart_level, type: bool, title: {ru: "Клик ставит умный уровень", en: "A click places a smart level"}, default: true}
   - {key: smart_level_sound, type: bool, title: {ru: "Звук умного уровня", en: "Smart level sound"}, default: false}
-  - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 2000, min: 1, max: 5000}
+  - {key: limit, type: integer, title: {ru: "Строк (если в фильтре бирж выбрано мало бирж, увеличьте лимит)", en: "Rows (raise it when the exchange filter keeps only a few exchanges)"}, default: 2000, min: 1, max: 5000}
   - {key: hide_blacklisted, type: bool, title: {ru: "Скрыть чёрный список", en: "Hide the blacklist"}, default: false}
   - {key: hide_usdt, type: bool, title: {ru: "Скрыть USDT в тикере", en: "Hide USDT in symbols"}, default: false}
 limits: {cpu_ms_per_call: 1000}
