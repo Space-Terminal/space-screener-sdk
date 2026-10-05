@@ -317,7 +317,10 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
   rows. `ttl_s` removes a row that was not re-emitted in time. Each row is at most 16 KiB as serialized
   JSON. At most 10000 rows or 32 MiB per plugin: beyond either cap the host evicts the least recently updated rows, so `replace: true` with more rows keeps the last ones of the batch. Sort and truncate in the plugin so the rows you want are the ones kept.
 - `symbol`, `exchange`, `market` make the row clickable: the default click opens that market.
-- `rank` (default 0): higher ranks stay above lower ones whatever the sort (pins, favourites).
+- `rank` (default 0): higher ranks stay above lower ones whatever the sort — the plugin's own order
+  (pins of its data, a blacklist at the bottom). Favourite tickers are the terminal's: from 0.104.73 it
+  shows its own ★ in every screener and keeps favourites above all other rows, so a plugin needs no
+  favourites column of its own.
 - A cell is a JSON number, string, bool or `null`, or `{"v": value, "tone"?: "pos"|"neg"|"muted"|"warn"|"accent", "text"?: "shown instead of v"}`.
   `exchanges` cells use `{"v": [{"exchange": "bybit", "market": "spot"}]}`.
 
