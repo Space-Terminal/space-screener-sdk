@@ -77,6 +77,7 @@ pub const RECORDED_FUNCTIONS: &[&str] = &[
     "exchanges",
     "history_cluster",
     "history_replay",
+    "signals",
     "now_ms",
 ];
 

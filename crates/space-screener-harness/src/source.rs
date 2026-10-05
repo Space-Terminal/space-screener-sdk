@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 use space_screener_check::recording::{Event, Recording};
 
 /// Replies to the data host functions (`http`, `http_batch`, `tickers`, `symbols`,
-/// `exchanges`, `history_*`, `now_ms`). Local host functions (kv, rows, logs) never reach it.
+/// `exchanges`, `history_*`, `signals`, `now_ms`). Local host functions (kv, rows, logs) never
+/// reach it.
 pub trait Source: Send {
     /// The reply envelope (`{"ok": …}` or `{"err": {code, message}}`), or `None` when the
     /// source has nothing for this call; the harness then answers `transport` and counts a miss
@@ -63,8 +64,9 @@ impl Source for Replay {
     }
 }
 
-/// A fixed, network-free data set for trial runs: a few exchanges and USDT pairs, no HTTP
-/// and no history. Enough to see that a plugin starts, survives failed requests and emits rows.
+/// A fixed, network-free data set for trial runs: a few exchanges and USDT pairs, no HTTP,
+/// no history and no signals. Enough to see that a plugin starts, survives failed requests and
+/// emits rows.
 #[derive(Debug, Default)]
 pub struct Offline;
 
@@ -135,6 +137,9 @@ impl Source for Offline {
                 Err(reply) => reply,
             },
             "http" | "history_cluster" | "history_replay" => err("transport", OFFLINE),
+            "signals" => ok(json!({
+                "seq": 0, "reset": true, "connected": false, "upserts": [], "removed": []
+            })),
             "http_batch" => {
                 let requests = input
                     .get("requests")

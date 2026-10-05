@@ -1,4 +1,4 @@
-// @space-terminal/screener — TypeScript PDK for Space Terminal screener plugins (ABI v1).
+// @space-terminal/screener — TypeScript PDK for Space Terminal screener plugins (ABI v1.1).
 //
 // `st build` bundles src/index.ts with this file and compiles it to screener.wasm with extism-js
 // (QuickJS). The top level of every module runs ONCE, at build time, and is snapshotted: keep
@@ -95,6 +95,78 @@ export interface ReplayRequest {
   max_trades?: number;
 }
 
+export type SignalSource = "activity" | "density" | "prints";
+export interface ActivitySignal {
+  /** yorsh, non_yorsh, unique_ticker, flat, has_futures */
+  tags: string[];
+  spread_pct: number;
+  volume_per_min_usd: number;
+  pnl_per_min_usd: number;
+  trades_per_min?: number;
+  liquidity_up_10pct_usd?: number;
+  liquidity_down_10pct_usd?: number;
+  token_age_days?: number;
+  print_gaps?: number[];
+}
+export interface DensitySignal {
+  exchange: string;
+  market: Market;
+  side: "bid" | "ask";
+  price: number;
+  qty: number;
+  notional_initial_usd: number;
+  notional_current_usd: number;
+  notional_avg_usd?: number;
+  eaten_pct: number;
+  distance_pct: number;
+  touch_count: number;
+  lifetime_s: number;
+  /** alive, reduced, dead */
+  status: string;
+  /** new, update, touched, reduced, dead, reappeared */
+  event: string;
+  prev_lifetime_s?: number;
+  trade_qty?: number;
+}
+export interface PrintsSignal {
+  exchange: string;
+  market: Market;
+  side: "buy" | "sell";
+  volume_usd: number;
+  batches: number;
+  prints_per_batch: number;
+}
+/** One aggregator signal; exactly one of activity / density / prints is set. */
+export interface Signal {
+  id: string;
+  source: SignalSource;
+  ts_ms: number;
+  symbol: string;
+  exchanges: ExchangeMarket[];
+  link?: string;
+  expires_at_ms?: number;
+  activity?: ActivitySignal;
+  density?: DensitySignal;
+  prints?: PrintsSignal;
+}
+export interface SignalsDelta {
+  /** Pass it as `since` next time. */
+  seq: number;
+  /** `upserts` is the whole current snapshot: drop everything else. */
+  reset: boolean;
+  /**
+   * The terminal's connection to the aggregator for this source is alive: data or a server
+   * keepalive within the last 90 s. A sparse source can stay silent for long while it is `true`.
+   */
+  connected: boolean;
+  upserts: Signal[];
+  removed: string[];
+}
+export interface SmartLevel {
+  signal_id: string;
+  sound?: boolean;
+}
+
 export type CellValue = number | string | boolean | null | ExchangeMarket[];
 export type Cell = CellValue | { v: CellValue; tone?: Tone; text?: string };
 export interface Row {
@@ -141,6 +213,8 @@ export class HostError extends Error {
 
 function call<T>(name: string, input: unknown): T {
   const fn = Host.getFunctions()[name];
+  // `st build` declares only the host functions of the manifest's min_terminal.
+  if (!fn) throw new HostError("unavailable", `${name} needs a newer min_terminal in manifest.yaml`);
   const arg = Memory.fromString(JSON.stringify(input ?? null));
   const out = Memory.find(fn(arg.offset));
   arg.free();
@@ -178,9 +252,20 @@ export const alert = (level: AlertLevel, title: string, body: string, rowKey?: s
 export const setStatus = (tone: StatusTone, text: string): void => call("set_status", { text, tone });
 /** Only inside on_click, once per click. */
 export const openMarket = (market: MarketRef): void => call("open_market", market);
+/** Opens the market and places a smart level at a density signal's price. Only inside
+ * on_click, once per click. A terminal older than 0.104.72 ignores the level and opens the
+ * market without it. */
+export const openMarketWithLevel = (market: MarketRef, level: SmartLevel): void =>
+  call("open_market", { ...market, smart_level: level });
+/** 1..16 markets at once. Only inside on_click, once per click; min_terminal 0.104.72. */
+export const openMarkets = (markets: MarketRef[]): void => call("open_markets", { markets });
 /** Only inside on_click, once per click. */
 export const openSpread = (a: MarketRef, b: MarketRef, layout?: "vertical" | "horizontal"): void =>
   call("open_spread", layout === undefined ? { a, b } : { a, b, layout });
+/** Signals of `source` changed after `since` (omit it: the whole snapshot). Needs `signals` in
+ * manifest.yaml and min_terminal 0.104.72; `SignalFeed` keeps the cursor. */
+export const signals = (source: SignalSource, since?: number): SignalsDelta =>
+  call("signals", since === undefined ? { source } : { source, since });
 export const log = (level: LogLevel, msg: string): void => call("log", { level, msg });
 export const nowMs = (): number => call("now_ms", null);
 export const debug = (msg: string): void => log("debug", msg);
@@ -266,6 +351,35 @@ export class Series {
   }
   get length(): number {
     return this.points.length;
+  }
+}
+
+/** The current signals of one source, kept in sync with the terminal: call `poll()` in on_timer. */
+export class SignalFeed {
+  readonly signals = new Map<string, Signal>();
+  /** `connected` of the last poll: the connection is alive, not that new signals arrived. */
+  connected = false;
+  private seq = 0;
+  constructor(readonly source: SignalSource) {}
+
+  /** Applies the terminal's changes; `removed` includes the ids a reset left out. */
+  poll(): { reset: boolean; upserted: string[]; removed: string[] } {
+    const delta = signals(this.source, this.seq > 0 ? this.seq : undefined);
+    this.seq = delta.seq;
+    this.connected = delta.connected;
+    const upserted: string[] = [];
+    const removed: string[] = [];
+    if (delta.reset) {
+      const fresh = new Set(delta.upserts.map((signal) => signal.id));
+      for (const id of this.signals.keys()) if (!fresh.has(id)) removed.push(id);
+      this.signals.clear();
+    }
+    for (const signal of delta.upserts) {
+      this.signals.set(signal.id, signal);
+      upserted.push(signal.id);
+    }
+    if (!delta.reset) for (const id of delta.removed) if (this.signals.delete(id)) removed.push(id);
+    return { reset: delta.reset, upserted, removed };
   }
 }
 

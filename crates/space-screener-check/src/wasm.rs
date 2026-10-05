@@ -8,6 +8,7 @@ use wasmparser::{
     Validator, WasmFeatures,
 };
 
+use crate::manifest::{ABI_1_1_TERMINAL, Manifest};
 use crate::report::{Code, Report};
 
 pub const FILE: &str = "screener.wasm";
@@ -38,7 +39,8 @@ pub const ENV_IMPORTS: &[&str] = &[
     "var_set",
 ];
 
-/// Host functions of ABI v1 (`extism:host/user`).
+/// Host functions of ABI v1 (`extism:host/user`); the ones in [`HOST_FUNCTIONS_SINCE`] link
+/// only in newer terminals.
 pub const HOST_FUNCTIONS: &[&str] = &[
     "http",
     "http_batch",
@@ -57,7 +59,48 @@ pub const HOST_FUNCTIONS: &[&str] = &[
     "open_spread",
     "log",
     "now_ms",
+    "signals",
+    "open_markets",
 ];
+
+/// Host functions added after the first ABI v1 terminal, with the first terminal that links
+/// them. An older terminal refuses a module importing one (`forbidden_import`), so the plugin
+/// must declare at least that `min_terminal` and gets `terminal_too_old` there instead.
+pub const HOST_FUNCTIONS_SINCE: &[(&str, semver::Version)] = &[
+    ("signals", ABI_1_1_TERMINAL),
+    ("open_markets", ABI_1_1_TERMINAL),
+];
+
+/// The host functions a plugin with this `min_terminal` may import.
+pub fn host_functions_for(min_terminal: &semver::Version) -> impl Iterator<Item = &'static str> {
+    HOST_FUNCTIONS.iter().copied().filter(move |name| {
+        HOST_FUNCTIONS_SINCE
+            .iter()
+            .find(|(newer, _)| newer == name)
+            .is_none_or(|(_, since)| since <= min_terminal)
+    })
+}
+
+/// Rules between a manifest and a module that passed [`inspect`]: a host function newer than
+/// the declared `min_terminal` would fail to link in the oldest terminal the plugin allows.
+pub fn check_imports(manifest: &Manifest, info: &WasmInfo) -> Result<(), Report> {
+    let mut r = Report::default();
+    for (module, name) in &info.imports {
+        if module != USER_MODULE {
+            continue;
+        }
+        if let Some((_, since)) = HOST_FUNCTIONS_SINCE.iter().find(|(newer, _)| newer == name)
+            && *since > manifest.min_terminal
+        {
+            r.error(
+                Code::InvalidManifest,
+                "min_terminal",
+                format!("the module imports `{name}`, which needs min_terminal >= {since}"),
+            );
+        }
+    }
+    if r.is_ok() { Ok(()) } else { Err(r) }
+}
 
 pub const REQUIRED_EXPORTS: &[&str] = &["init", "on_timer"];
 
@@ -634,6 +677,37 @@ mod tests {
         assert_eq!(
             inspect(b"not wasm").unwrap_err().errors[0].code,
             Code::InvalidWasm
+        );
+    }
+
+    #[test]
+    fn newer_host_functions_need_a_newer_min_terminal() {
+        let info = inspect(&module(&format!(
+            r#"(import "extism:host/user" "signals" (func (param i64) (result i64)))
+               (import "extism:host/user" "http" (func (param i64) (result i64)))
+               {ENTRY}"#
+        )))
+        .unwrap();
+        let manifest = |min_terminal: &str| {
+            Manifest::parse(&format!(
+                "abi: 1\nid: ivan.dens\nversion: 0.1.0\nname: {{en: D}}\nlang: rust\n\
+                 min_terminal: {min_terminal}\ncolumns: [{{key: d, type: usd}}]\n"
+            ))
+            .unwrap()
+        };
+        let report = check_imports(&manifest("0.104.71"), &info).unwrap_err();
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].path, "min_terminal");
+        assert!(report.errors[0].message.contains("`signals`"), "{report}");
+        assert!(check_imports(&manifest("0.104.72"), &info).is_ok());
+
+        let old: Vec<&str> = host_functions_for(&semver::Version::new(0, 104, 70)).collect();
+        assert!(
+            old.contains(&"http") && !old.contains(&"signals") && !old.contains(&"open_markets")
+        );
+        assert_eq!(
+            host_functions_for(&ABI_1_1_TERMINAL).count(),
+            HOST_FUNCTIONS.len()
         );
     }
 

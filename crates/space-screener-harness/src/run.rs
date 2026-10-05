@@ -10,7 +10,7 @@ use crate::output::{LogLine, Output, Row, Stats};
 use crate::source::{Offline, Replay};
 
 /// Terminal version the harness reports to `init` when no recording supplies one.
-pub const HARNESS_TERMINAL: &str = "0.104.71";
+pub const HARNESS_TERMINAL: &str = "0.104.72";
 /// Start of the virtual clock for trial runs without a recording (2026-01-01T00:00:00Z).
 pub const TRIAL_EPOCH_MS: i64 = 1_767_225_600_000;
 pub const TRIAL_TIMERS: usize = 3;

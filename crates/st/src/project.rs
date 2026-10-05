@@ -54,14 +54,17 @@ fn shape_hint(report: &Report) -> &'static str {
     }
 }
 
-fn check_module(wasm: &[u8]) -> Result<WasmInfo> {
-    space_screener_check::inspect(wasm).map_err(|report| {
+fn check_module(wasm: &[u8], manifest: &Manifest) -> Result<WasmInfo> {
+    let info = space_screener_check::inspect(wasm).map_err(|report| {
         anyhow!(
             "{WASM_FILE}:\n  {}{}",
             problems(&report),
             shape_hint(&report)
         )
-    })
+    })?;
+    space_screener_check::check_imports(manifest, &info)
+        .map_err(|report| anyhow!("{}:\n  {}", manifest::FILE, problems(&report)))?;
+    Ok(info)
 }
 
 fn ensure_target(dir: &Path) -> Result<()> {
@@ -165,10 +168,10 @@ pub fn build(dir: &Path) -> Result<Built> {
     let (manifest_text, manifest) = check_manifest(dir)?;
     let wasm = match manifest.lang {
         PluginLang::Rust => build_rust(dir)?,
-        PluginLang::Ts => ts::build(dir)?,
+        PluginLang::Ts => ts::build(dir, &manifest.min_terminal)?,
     };
     std::fs::write(dir.join(WASM_FILE), &wasm).context("cannot write screener.wasm")?;
-    let module = check_module(&wasm)?;
+    let module = check_module(&wasm, &manifest)?;
     Ok(Built {
         manifest_text,
         manifest,
@@ -182,7 +185,7 @@ pub fn validate(dir: &Path) -> Result<Built> {
     let path = dir.join(WASM_FILE);
     let wasm = std::fs::read(&path)
         .with_context(|| format!("cannot read {}; run `st build` first", path.display()))?;
-    let module = check_module(&wasm)?;
+    let module = check_module(&wasm, &manifest)?;
     Ok(Built {
         manifest_text,
         manifest,

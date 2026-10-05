@@ -1,6 +1,7 @@
 # Space Terminal screener ABI v1
 
-This is the wire contract between a screener plugin and Space Terminal. The Rust PDK
+This is the wire contract between a screener plugin and Space Terminal, including the v1.1
+additions of terminal 0.104.72 (aggregator signals, opening several markets, smart levels). The Rust PDK
 (`crates/space-screener`) and the TypeScript PDK (`crates/st/ts/pdk`, written into TypeScript projects
 by `st init --lang ts`) implement the plugin side; you only need this file if you write a PDK for
 another language or debug the raw protocol. The rules below are code in `crates/space-screener-check`:
@@ -24,6 +25,11 @@ The terminal rejects a module (`forbidden_import`) that imports anything outside
 |---|---|
 | `extism:host/env` | `alloc`, `free`, `length`, `length_unsafe`, `load_u8`, `load_u64`, `store_u8`, `store_u64`, `input_length`, `input_load_u8`, `input_load_u64`, `output_set`, `error_set`, `config_get`, `var_get`, `var_set` |
 | `extism:host/user` | the host functions of this document |
+
+A host function newer than the plugin's `min_terminal` is refused too (`invalid_manifest`, path
+`min_terminal`): `signals` and `open_markets` need `min_terminal: 0.104.72`, since an older terminal
+would refuse the whole module. The Rust PDK imports only the host functions a plugin calls; for
+TypeScript `st build` declares only those of the manifest's `min_terminal`.
 
 Extism's own `http_request`, `log_*`, `get_log_level` and any `wasi_*` import are refused. With the
 Rust PDK use `extism-pdk = { version = "1.4.1", default-features = false }` (the PDK crate already does).
@@ -85,11 +91,12 @@ description: {ru: "...", en: "..."}     # optional
 lang: rust                              # required: rust | ts
 categories: [open-interest]             # catalog only, see below
 source: https://github.com/me/oi        # catalog only, optional
-min_terminal: 0.104.70                  # required, semver; an older terminal refuses: terminal_too_old
+min_terminal: 0.104.72                  # required, semver; an older terminal refuses: terminal_too_old
 http: [fapi.binance.com, api.bybit.com] # exact host names http() may call, https only
 history: [cluster, replay]              # optional, cloud history access
+signals: [density]                      # optional (v1.1): activity | density | prints, see Signals
 timer_ms: 60000                         # optional, 250..=3600000, default 1000
-feeds: []                               # reserved for v1.1; non-empty in v1 -> unsupported_feed
+feeds: []                               # reserved for trade/order-book streams; non-empty -> unsupported_feed
 columns:                                # table columns, in display order
   - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
   - {key: oi, type: usd, title: {en: "OI, $"}, sort: desc, width: 120}
@@ -104,6 +111,7 @@ limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional; cpu_ms_per_ca
   `lpt1`..`lpt9` (`ivan.con` is refused, `ivan.console` is fine) — the id is a folder name on every OS.
 - `http` hosts are bare DNS names; IP literals and `localhost` are refused. A host, a column key or a
   parameter key listed twice is refused.
+- `signals` lists each source at most once; a non-empty list needs `min_terminal: 0.104.72` or newer.
 - `width` of a column is 1..=2000 px.
 - The first column with `sort` is the default sort of the pane.
 - `pricing`, `hosting`, `alerts` and other fields are ignored in v1.
@@ -153,7 +161,7 @@ non-zero status) is logged as an error and counted as a failure.
 | `on_timer` | yes | `{now_ms}` | every `timer_ms`, counted from the end of the previous call (calls never overlap) |
 | `on_click` | no | `{row: {key, symbol?, exchange?, market?}, column: string\|null, button: "left"\|"right"\|"middle", modifiers: {shift, ctrl, alt, logo}}` | the user clicked a row; without this export the terminal opens the row's market itself, immediately |
 | `on_params` | no | `{params}` | the user changed parameters; without this export the terminal restarts the plugin with a new `init` |
-| `on_batch` | — | reserved for v1.1 feeds | never called in v1 |
+| `on_batch` | — | reserved for `feeds` | never called yet |
 
 `params` always carries every declared parameter (user value or `default`).
 
@@ -196,13 +204,15 @@ arguments.
 | `exchanges` | `null` | `[{exchange, market, connected}]` | — |
 | `history_cluster` | `{exchange, symbol, from_ms, to_ms, tf_s, max_cells?}` | `{cells: [{t_ms, price, bid_vol, ask_vol, trades}], truncated}` | `not_permitted`, `quota`, `transport` |
 | `history_replay` | `{exchange, symbol, from_ms, to_ms, max_trades?}` | replay chunk (see below) | `not_permitted`, `quota`, `transport` |
+| `signals` (v1.1) | `{source: "activity"\|"density"\|"prints", since?: u64}` | `SignalsDelta` (see Signals) | `not_permitted`, `unavailable`, `bad_request` |
 | `kv_get` | `{key}` | stored value or `null` | — |
 | `kv_set` | `{key, value}` (`null` deletes) | `null` | `too_large` |
 | `emit_rows` | `{rows: [Row], replace?: bool}` | `null` | — |
 | `expire` | `{keys: [string]}` | `null` | — |
 | `emit_alert` | `{level: "info"\|"warn"\|"urgent", title, body, row_key?}` | `null` | — |
 | `set_status` | `{text, tone: "neutral"\|"ok"\|"warn"\|"error"}` | `null` | — |
-| `open_market` | `{exchange, market, symbol}` | `null` | `not_in_click` |
+| `open_market` | `{exchange, market, symbol, smart_level?: {signal_id, sound?}}` (`smart_level` v1.1) | `null` | `not_in_click` |
+| `open_markets` (v1.1) | `{markets: [MarketRef]}` (1..=16) | `null` | `not_in_click`, `bad_request` |
 | `open_spread` | `{a: MarketRef, b: MarketRef, layout?: "vertical"\|"horizontal"}` | `null` | `not_in_click` |
 | `log` | `{level: "debug"\|"info"\|"warn"\|"error", msg}` | `null` | — |
 | `now_ms` | `null` | ms since Unix epoch | — |
@@ -249,6 +259,48 @@ plugin. `history_cluster` returns footprint cells of the cloud history (7 days).
 the terminal's cloud replay chunk (`from_ms`, `to_ms`, `next_from_ms`, `snapshots`, `trades`, `events`,
 …); its shape follows the terminal and is **not frozen in v1** — treat it as JSON.
 
+### Signals (v1.1)
+
+The terminal keeps a live connection to the Space screener aggregator and shares its signals with
+plugins that list the source in `signals` of the manifest (else `not_permitted`). `signals` reads the
+terminal's buffers — no network, no quota — so call it every `on_timer`:
+
+```json
+SignalsDelta {"seq": 1842, "reset": false, "connected": true,
+              "upserts": [Signal], "removed": ["binance|BTCUSDT|bid|60000"]}
+```
+
+- Without `since` (or with `0`, a cursor older than the terminal keeps, or after the terminal restarted
+  the feed) the reply has `reset: true` and `upserts` is the whole current snapshot. Otherwise
+  `upserts` holds the signals changed after `since` (latest version of each) and `removed` the ids
+  dropped after it. An id is never in both `upserts` and `removed` of one reply. Pass `seq` as the
+  next `since`. `SignalFeed` (Rust and TypeScript PDK) does this.
+- `connected`: the terminal's connection to the aggregator for this source is alive — data or a
+  server keepalive within the last 90 s. A sparse source (`activity`) can stay silent for long
+  while `connected` is `true`.
+- `unavailable`: this build of the terminal does not provide the source (`activity` and `prints` come
+  with the Pro build).
+- A density snapshot can hold up to ~20000 signals: filter before `emit_rows` (10000 rows at most).
+
+```json
+Signal {"id": "…", "source": "density", "ts_ms": 1790700000000, "symbol": "BTCUSDT",
+        "exchanges": [{"exchange": "binance", "market": "futures"}],
+        "link": "…", "expires_at_ms": 1790700300000,
+        "density": {…}}
+```
+
+Exactly one of `activity`, `density`, `prints` is set, matching `source`. `symbol` is the canonical
+`BASEQUOTE`; `exchanges` uses the terminal's exchange slugs (exchanges it does not know are left out);
+`link` and `expires_at_ms` are optional. Numbers are JSON numbers, for display:
+
+| Source | Fields |
+|---|---|
+| `activity` | `tags` (`yorsh`, `non_yorsh`, `unique_ticker`, `flat`, `has_futures`), `spread_pct`, `volume_per_min_usd`, `pnl_per_min_usd`; optional `trades_per_min`, `liquidity_up_10pct_usd`, `liquidity_down_10pct_usd`, `token_age_days`, `print_gaps` |
+| `density` | `exchange`, `market`, `side` (`bid`/`ask`), `price`, `qty`, `notional_initial_usd`, `notional_current_usd`, `eaten_pct`, `distance_pct` (signed), `touch_count`, `lifetime_s`, `status` (`alive`, `reduced`, `dead`), `event` (`new`, `update`, `touched`, `reduced`, `dead`, `reappeared`); optional `notional_avg_usd`, `prev_lifetime_s`, `trade_qty` |
+| `prints` | `exchange`, `market`, `side` (`buy`/`sell`, the aggressor), `volume_usd`, `batches`, `prints_per_batch` |
+
+New tags, statuses and events may appear: treat unknown values as "other".
+
 ### Key-value store
 
 Survives restarts of the plugin and the terminal. The whole store is at most 1 MiB (`too_large`).
@@ -275,7 +327,14 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
   `urgent` also play the screener alert sound. At most 6 alerts per minute per plugin, the rest is
   dropped with a warning in the log.
 - `set_status` sets the short status line of the pane.
-- `open_market` / `open_spread` work only inside `on_click`, once per click (`not_in_click` otherwise).
+- `open_market` / `open_markets` / `open_spread` work only inside `on_click`, once per click in total
+  (`not_in_click` otherwise).
+- `open_markets` (v1.1) opens 1..=16 markets at once, like a click on a multi-exchange row; a pane in a
+  link group sends the first market to the group.
+- `smart_level` of `open_market` (v1.1) also places a smart level in the opened order book at the price
+  of the density signal `signal_id` (the terminal takes the exact price and live metrics from its own
+  buffer; an unknown id opens the market without a level). `sound` alerts on touches and fills.
+  A terminal older than 0.104.72 ignores `smart_level` and opens the market without a level.
   Plain row clicks need neither: without an `on_click` export the terminal opens the row's market.
   The terminal routes the market to the pane's link group or a new order book, like its own screeners.
 
@@ -340,7 +399,7 @@ clock and compares rows, alerts, status and clicks with `<recording>.expected.js
 ```
 
 - Recorded functions: `http`, `http_batch`, `tickers`, `symbols`, `exchanges`, `history_cluster`,
-  `history_replay`, `now_ms`. Local ones (kv, rows, alerts, status, log) run for real on replay.
+  `history_replay`, `signals`, `now_ms`. Local ones (kv, rows, alerts, status, log) run for real on replay.
 - Replay answers a call with the first unused recorded call of the same function and the same JSON
   input; a call not in the recording gets `{"err": {"code": "transport", "message": "not recorded"}}`.
 - `kv` is the plugin's store at `init`; `truncated` means the recording hit the terminal's 32 MiB cap.
@@ -352,7 +411,7 @@ from the author page of the store) and `{manifest, wasm_b64, recording?}`:
 
 - The registry checks the manifest, the module and the catalog fields with the rules above, then runs
   the plugin headless (`init` and three `on_timer`, 20 s of wall time at most) on the recording, or on a
-  small offline data set without network when there is none. The report (verdict ok/warn/fail, issues,
+  small offline data set without network when there is none (`signals` answers an empty snapshot there). The report (verdict ok/warn/fail, issues,
   sample rows, log lines ≤ 4096 bytes each, ≤ 256 KiB in total) goes to the moderator.
 - Limits: manifest ≤ 64 KiB, module ≤ 10 MiB with a code section ≤ 4 MiB, recording ≤ 4 MiB; at most 3 versions of one screener
   and 10 of one author waiting for moderation (`too_many_pending`).

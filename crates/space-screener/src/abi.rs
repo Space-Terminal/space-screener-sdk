@@ -37,6 +37,29 @@ impl MarketRef {
     }
 }
 
+/// A smart level [`crate::host::open_market_with_level`] places at a density signal's price.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SmartLevel {
+    pub signal_id: String,
+    /// Sound when the level is touched or eaten.
+    #[serde(default)]
+    pub sound: bool,
+}
+
+impl SmartLevel {
+    pub fn new(signal_id: impl Into<String>) -> Self {
+        Self {
+            signal_id: signal_id.into(),
+            sound: false,
+        }
+    }
+
+    pub fn with_sound(mut self, sound: bool) -> Self {
+        self.sound = sound;
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ExchangeMarket {
     pub exchange: String,

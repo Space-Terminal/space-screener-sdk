@@ -7,7 +7,7 @@ use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use space_screener_check::HOST_FUNCTIONS;
+use space_screener_check::host_functions_for;
 
 use crate::toolchain::{self, Tools};
 
@@ -172,14 +172,15 @@ fn entry_module(exports: &[String]) -> String {
 }
 
 /// extism-js interface: exactly the bundled exports (a mismatch calls the wrong function), the
-/// ABI host functions, and `error_set` for async errors.
-fn interface(exports: &[String]) -> String {
+/// host functions a terminal of `min_terminal` links (extism-js imports every declared one), and
+/// `error_set` for async errors.
+fn interface(exports: &[String], min_terminal: &semver::Version) -> String {
     let mut out = String::from("declare module \"main\" {\n");
     for name in exports {
         out.push_str(&format!("  export function {name}(): I32;\n"));
     }
     out.push_str("}\ndeclare module \"extism:host\" {\n  interface user {\n");
-    for name in HOST_FUNCTIONS {
+    for name in host_functions_for(min_terminal) {
         out.push_str(&format!("    {name}(ptr: I64): I64;\n"));
     }
     out.push_str("  }\n}\ndeclare module \"extism:host\" {\n  interface env {\n    error_set(ptr: I64);\n  }\n}\n");
@@ -284,7 +285,7 @@ fn compile(dir: &Path, exports: &[String], tools: &Tools) -> Result<Vec<u8>> {
 }
 
 /// Builds the module of a `lang: ts` project; the caller checks it like any other.
-pub fn build(dir: &Path) -> Result<Vec<u8>> {
+pub fn build(dir: &Path, min_terminal: &semver::Version) -> Result<Vec<u8>> {
     // Tools run with the project as their working directory; a relative project path would
     // then point at the wrong place for `node_modules/.bin/…`.
     let dir = &dir
@@ -312,7 +313,7 @@ pub fn build(dir: &Path) -> Result<Vec<u8>> {
             &format!("--outfile={OUT_DIR}/bundle.js"),
         ],
     )?;
-    std::fs::write(out.join("bundle.d.ts"), interface(&exports))?;
+    std::fs::write(out.join("bundle.d.ts"), interface(&exports, min_terminal))?;
     let tools = toolchain::ensure()?;
     compile(dir, &exports, &tools)
 }
@@ -343,16 +344,22 @@ mod tests {
     }
 
     #[test]
-    fn interface_lists_exports_and_every_host_function() {
-        let d_ts = interface(&names(&["init", "on_timer"]));
+    fn interface_lists_exports_and_the_host_functions_of_min_terminal() {
+        let d_ts = interface(
+            &names(&["init", "on_timer"]),
+            &space_screener_check::ABI_1_1_TERMINAL,
+        );
         assert!(d_ts.contains("export function init(): I32;"));
         assert!(!d_ts.contains("on_click"));
-        for name in HOST_FUNCTIONS {
+        for name in space_screener_check::HOST_FUNCTIONS {
             assert!(
                 d_ts.contains(&format!("    {name}(ptr: I64): I64;")),
                 "{name}"
             );
         }
+        let old = interface(&names(&["init"]), &semver::Version::new(0, 104, 70));
+        assert!(old.contains("    http(ptr: I64): I64;"));
+        assert!(!old.contains("signals"), "{old}");
         assert!(d_ts.contains("error_set(ptr: I64);"));
         assert!(
             entry_module(&names(&["init"]))

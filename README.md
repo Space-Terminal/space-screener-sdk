@@ -14,6 +14,7 @@ history) and shows their rows as a table pane; a click on a row opens the market
 | `examples/top-movers` | biggest 5 minute moves from the terminal's tickers |
 | `examples/funding-rates` | funding rate, period, APR and next payment on Binance, Bybit, Bitget, Gate, MEXC, Hyperliquid |
 | `examples/cross-exchange-spread` | the same pair on different exchanges: cheapest, dearest, gap; a click opens the spread of the two exchanges (two books, chart below), a right click the cheaper leg in the linked book; exchanges picked in the parameters |
+| `examples/density` | v1.1, the aggregator's `density` signals: large resting orders with size, eaten share, distance, lifetime and touches; a click opens the book with a smart level at the density (`open_market_with_level`) |
 | `examples/volume-spike` | TypeScript: turnover of the last minutes against the 24h average |
 | `ABI.md` | wire contract (manifest, exports, host functions, limits, local API) |
 | `SKILL.md`, `llms.txt` | guides for Claude Code and other LLM agents |

@@ -100,6 +100,8 @@ so keep rounds short.
 | `set_status(StatusTone::Ok, "8/8 exchanges")` | short status line in the pane |
 | `alert(AlertLevel::Warn, title, body)` / `alert_row(…, key)` | toast + notification (≤ 6/min); `Warn`/`Urgent` also play a sound, `Info` is silent |
 | `open_market(&MarketRef)` / `open_spread(&a, &b, None)` | only inside `on_click` (needs `export_screener!(T, on_click)`) |
+| `open_markets(&[MarketRef])` / `open_market_with_level(&m, &SmartLevel::new(id))` | v1.1, inside `on_click`: up to 16 order books at once / a book with a smart level at a density signal |
+| `SignalFeed::new(SignalSource::Density)` → `feed.poll()?`, `feed.iter()` | v1.1: live aggregator signals (`activity`, `density`, `prints`) the terminal shares; needs `signals: [density]` in the manifest |
 | `kv_get::<T>(key)` / `kv_set(key, &v)` / `kv_delete(key)` | state that survives restarts, ≤ 1 MiB total |
 | `history_cluster(&req)` / `history_replay(&req)` | cloud history; needs `history: [cluster]` / `[replay]` in the manifest |
 | `now_ms()` | current time (there is no `std::time` in wasm) |
@@ -180,7 +182,10 @@ Column types: `text number integer percent usd price time duration countdown sym
 `percent` values are already percents (1.5 = 1.5 %); `time`/`countdown` are ms since epoch;
 `exchanges` cells are `Cell::markets([ExchangeMarket::new("bybit", Market::Spot)])`.
 Param types: `number integer bool text select` (select needs `options`, `default` must fit).
-`feeds` must stay empty in v1 (trade/order-book streams come later) — poll in `on_timer`.
+`signals: [activity, density, prints]` (v1.1, `min_terminal: 0.104.72`) gives the Space aggregator's
+signals through `SignalFeed`; `activity` and `prints` need the terminal's Pro build (`unavailable`
+otherwise — show it with `set_status`). `feeds` must stay empty (trade/order-book streams come later) —
+poll in `on_timer`.
 
 Exchange slugs (lowercase): `binance bybit okx bitget gate mexc kucoin bingx hyperliquid`, and others the
 user connected — check `exchanges()`. Markets: `spot`, `futures`.
@@ -220,6 +225,7 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | history (5/15 min changes) resets | every `st dev` reinstall and every crash restarts the plugin; windows fill again from scratch |
 | clicks feel slow | do not export `on_click` unless needed — without it the terminal opens the row's market at once |
 | `not_in_click` | `open_market` only from `on_click` exported with `export_screener!(T, on_click)` |
+| `invalid_manifest: min_terminal: the module imports signals` | v1.1 calls (`signals`, `open_markets`) need `min_terminal: 0.104.72` |
 | plugin restarts, `st logs` shows `panic: …` | fix the panic at the logged location (index out of bounds, `unwrap` on `None`, …) |
 | numbers as strings in exchange JSON | parse strings (`"83890.5".parse::<f64>()`) or deserialize with a string-or-number helper |
 | `st test` shows `N not recorded` | the code now calls data functions with inputs the recording does not have (another URL, symbol or exchange): record again |
@@ -425,7 +431,8 @@ export function on_timer(input: TimerInput) {
 - Host calls are synchronous and throw `HostError` (`e.code`): `http`, `httpBatch`, `tickers`, `symbols`,
   `exchanges`, `historyCluster`, `historyReplay`, `kvGet`, `kvSet`, `emitRows`, `replaceRows`, `expire`,
   `alert`, `setStatus`, `openMarket`, `openSpread`, `log`/`debug`/`info`/`warn`/`error`, `nowMs`;
-  helpers `Series`, `secs`/`mins`/`hours`, `signed`, `muted`, `toned`, `row`.
+  v1.1 (`min_terminal: 0.104.72`): `signals`, `openMarkets`, `openMarketWithLevel`;
+  helpers `Series`, `SignalFeed`, `secs`/`mins`/`hours`, `signed`, `muted`, `toned`, `row`.
 - `fetch(url)` works for hosts in manifest `http` (it goes through `http`); `console.log` goes to `st logs`.
   An `async` export is fine: a rejected promise is reported as a failed call.
 - Top level runs once when `st build` snapshots the module: a host call there fails the build
