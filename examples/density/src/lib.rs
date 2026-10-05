@@ -421,5 +421,15 @@ mod tests {
             ids(density.visible(&filter(json!({})), false, 10)),
             ["new", "mid", "old"]
         );
+        let mut eth = level("eth", 0, "alive", None);
+        eth.symbol = "ETHUSDT".to_string();
+        density.feed.apply(SignalsDelta {
+            upserts: vec![eth],
+            ..SignalsDelta::default()
+        });
+        assert_eq!(
+            ids(density.visible(&filter(json!({})), false, 10)),
+            ["eth", "new", "mid", "old"]
+        );
     }
 }
