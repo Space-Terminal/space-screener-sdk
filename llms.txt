@@ -32,7 +32,7 @@
 
 ## Manifest
 - Required: `abi: 1`, `id` (^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$, not `install` or `sync`, no con/prn/aux/nul/com1-9/lpt1-9 segment between dots), `version` (semver), `name {ru,en}`, `lang: rust|ts`, `min_terminal: 0.104.70`
-- `http: [bare.host.names]` (every host called; no IP literals, no localhost), `timer_ms` (250..=3600000), `columns [{key, type, title{ru,en}, sort?: asc|desc, width?}]`, `params [{key, type, title, default, min?, max?, options?}]`, `limits {memory_mb ≤64, cpu_ms_per_call 50..=1000}`, `history?: [cluster, replay]`, `signals?: [activity, density, prints]` (v1.1, min_terminal ≥ 0.104.72), `feeds: []`
+- `http: [bare.host.names]` (every host called; no IP literals, no localhost), `timer_ms` (250..=3600000), `columns [{key, type, title{ru,en}, sort?: asc|desc, width?, show_if?: <bool param key>}]` (show_if hides the column while the bool param is false; terminal 0.104.73+, older shows it), `params [{key, type, title, default, min?, max?, options?}]`, `limits {memory_mb ≤64, cpu_ms_per_call 50..=1000}`, `history?: [cluster, replay]`, `signals?: [activity, density, prints]` (v1.1, min_terminal ≥ 0.104.72), `feeds: []`
 - Column types: text number integer percent usd price time duration countdown symbol exchange exchanges bool; param types: number integer bool text select
 - `install` and `sync` are reserved ids; duplicate hosts/columns/params are refused; column width 1..2000
 - Catalog (st publish): `description {ru|en}` ≤ 2000 chars, `categories` 1..3 of volume open-interest funding spread movers listings orderbook other, optional `source: https://…`; version without build metadata; limits manifest ≤ 64 KiB, wasm ≤ 10 MiB with code section ≤ 4 MiB, recording ≤ 4 MiB, ≤ 3 pending versions per screener

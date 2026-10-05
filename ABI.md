@@ -100,9 +100,11 @@ feeds: []                               # reserved for trade/order-book streams;
 columns:                                # table columns, in display order
   - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
   - {key: oi, type: usd, title: {en: "OI, $"}, sort: desc, width: 120}
+  - {key: chg5, type: percent, title: {en: "OI 5m"}, show_if: col_chg5}   # shown while col_chg5 is true
 params:                                 # user-editable parameters
   - {key: min_oi, type: number, title: {en: "Min OI, $"}, default: 5000000, min: 0}
   - {key: side, type: select, title: {en: "Side"}, default: both, options: [both, long, short]}
+  - {key: col_chg5, type: bool, title: {en: "Show OI 5m"}, default: true}
 limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional; cpu_ms_per_call 50..=1000
 ```
 
@@ -113,6 +115,12 @@ limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional; cpu_ms_per_ca
   parameter key listed twice is refused.
 - `signals` lists each source at most once; a non-empty list needs `min_terminal: 0.104.72` or newer.
 - `width` of a column is 1..=2000 px.
+- `show_if` of a column names a `bool` parameter (`invalid_manifest` at `columns[i].show_if` otherwise):
+  the terminal (0.104.73 and newer) hides the column while that parameter is `false` and shows it
+  again when it turns `true`, with no reinstall — a checkbox «show column X» in the ⚙ dialog. Rows
+  may keep sending the column's cells. It needs no newer `min_terminal`: older terminals show the
+  column always. Users can also hide any column themselves in the pane (terminal 0.104.73+); that
+  choice belongs to the pane and is not sent to the plugin.
 - The first column with `sort` is the default sort of the pane.
 - `pricing`, `hosting`, `alerts` and other fields are ignored in v1.
 
