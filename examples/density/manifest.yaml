@@ -1,18 +1,17 @@
 abi: 1
 id: space.density
-version: 0.1.0
+version: 0.1.1
 name: {ru: "Density", en: "Density"}
 description:
-  ru: "Крупные заявки (плотности) в стаканах бирж в реальном времени от сервера Space: биржа, тикер, сторона, цена, текущий и начальный объём в долларах, сколько съедено, дистанция до цены, сколько живёт и сколько было касаний. Клик открывает стакан и ставит на цене плотности умный уровень с её живыми метриками (выключается в параметрах); ★ — в избранное, ⊘ — инструмент в чёрный список"
-  en: "Large resting orders (densities) in exchange order books, live from the Space server: exchange, symbol, side, price, the dollar size now and at the start, how much is eaten, the distance to the price, how long it lives and how many times the price touched it. A click opens the order book and places a smart level at the density's price with its live metrics (can be turned off in the parameters); ★ pins a level, ⊘ blacklists the instrument"
+  ru: "Крупные заявки (плотности) в стаканах бирж в реальном времени от сервера Space: биржа, тикер, сторона, цена, текущий и начальный объём в долларах, сколько съедено, дистанция до цены, сколько живёт и сколько было касаний. Клик открывает стакан и ставит на цене плотности умный уровень с её живыми метриками (выключается в параметрах); ⊘ — инструмент в чёрный список"
+  en: "Large resting orders (densities) in exchange order books, live from the Space server: exchange, symbol, side, price, the dollar size now and at the start, how much is eaten, the distance to the price, how long it lives and how many times the price touched it. A click opens the order book and places a smart level at the density's price with its live metrics (can be turned off in the parameters); ⊘ blacklists the instrument"
 lang: rust
 categories: [orderbook]
 source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/density
-min_terminal: 0.104.72
+min_terminal: 0.104.73
 signals: [density]
 timer_ms: 1000
 columns:
-  - {key: fav, type: text, title: {ru: "★", en: "★"}, width: 28}
   - {key: ban, type: text, title: {ru: "⊘", en: "⊘"}, width: 28}
   - {key: time, type: time, title: {ru: "Время", en: "Time"}, sort: desc}
   - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}
@@ -29,9 +28,6 @@ columns:
   - {key: touches, type: integer, title: {ru: "Касания", en: "Touches"}}
 params:
   - {key: search, type: text, title: {ru: "Тикер содержит", en: "Symbol contains"}, default: ""}
-  - {key: exchanges, type: text, title: {ru: "Только биржи (через запятую, пусто — все)", en: "Only exchanges (comma-separated, empty — all)"}, default: ""}
-  - {key: exclude_exchanges, type: text, title: {ru: "Скрыть биржи", en: "Hide exchanges"}, default: ""}
-  - {key: market, type: select, title: {ru: "Рынок", en: "Market"}, default: both, options: [both, spot, futures]}
   - {key: side, type: select, title: {ru: "Сторона", en: "Side"}, default: both, options: [both, bid, ask]}
   - {key: hide_dead, type: bool, title: {ru: "Скрыть мёртвые", en: "Hide dead"}, default: false}
   - {key: min_current, type: number, title: {ru: "Мин. текущий объём, $", en: "Min current size, $"}, default: 0, min: 0}
@@ -43,7 +39,7 @@ params:
   - {key: avg_multiplier, type: number, title: {ru: "Текущий / средний ≥ (0 — выключено)", en: "Current / average ≥ (0 — off)"}, default: 1, min: 0}
   - {key: smart_level, type: bool, title: {ru: "Клик ставит умный уровень", en: "A click places a smart level"}, default: true}
   - {key: smart_level_sound, type: bool, title: {ru: "Звук умного уровня", en: "Smart level sound"}, default: false}
-  - {key: limit, type: integer, title: {ru: "Строк", en: "Rows"}, default: 2000, min: 1, max: 5000}
+  - {key: limit, type: integer, title: {ru: "Строк (если в фильтре бирж выбрано мало бирж, увеличьте лимит)", en: "Rows (raise it when the exchange filter keeps only a few exchanges)"}, default: 2000, min: 1, max: 5000}
   - {key: hide_blacklisted, type: bool, title: {ru: "Скрыть чёрный список", en: "Hide the blacklist"}, default: false}
   - {key: hide_usdt, type: bool, title: {ru: "Скрыть USDT в тикере", en: "Hide USDT in symbols"}, default: false}
 limits: {cpu_ms_per_call: 1000}

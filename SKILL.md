@@ -86,7 +86,8 @@ message and location (`st logs`) before the terminal restarts the plugin.
 Clicks: rows with `symbol`/`exchange`/`market` open their order book on click — the terminal does it
 at once, no code needed. Only for custom click logic implement `on_click` and export with
 `export_screener!(MyScreener, on_click)`; such clicks wait while `on_timer` runs (calls never overlap),
-so keep rounds short.
+so keep rounds short. Arrow keys ↑/↓ over the pane (terminal 0.104.73+) arrive as the same left click
+(`column` none, no modifiers); the terminal replaces the books they open itself.
 
 ## Host API (all return `space_screener::Result`, errors carry a `code()`)
 
@@ -175,7 +176,9 @@ source: https://github.com/me/oi # optional link to the code
 ```
 
 `install` and `sync` are reserved ids. A host, column or parameter listed twice is refused; column
-`width` is 1..2000. Versions for the catalog have no build metadata (`1.2.0`, not `1.2.0+b1`), and the
+`width` is 1..2000. A column with `show_if: <bool param key>` is hidden while that parameter is false
+(terminal 0.104.73+, no reinstall; older terminals show it) — use it for «show column X» checkboxes
+instead of rebuilding the manifest. Versions for the catalog have no build metadata (`1.2.0`, not `1.2.0+b1`), and the
 catalog takes at most 4 MiB of wasm code (`st validate` says so; typical Rust screeners are far below).
 
 Column types: `text number integer percent usd price time duration countdown symbol exchange exchanges bool`.

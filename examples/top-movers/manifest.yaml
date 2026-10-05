@@ -1,16 +1,17 @@
 abi: 1
 id: space.top-movers
-version: 0.1.0
+version: 0.1.1
 name: {ru: "Топ движений за 5 минут", en: "Top 5 minute movers"}
 description:
-  ru: "Самые сильные изменения цены за 5 минут на подключённых биржах"
-  en: "Biggest 5 minute price moves on connected exchanges"
+  ru: "Самые сильные изменения цены за 5 минут на всех подключённых биржах. Пока копится история за 5 минут, наверху — самые сильные изменения за сутки"
+  en: "Biggest 5 minute price moves on all connected exchanges. While the 5 minute history is collecting, the biggest 24h moves come first"
 lang: rust
 categories: [movers]
 source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/top-movers
 min_terminal: 0.104.70
 http: []
 timer_ms: 5000
+limits: {cpu_ms_per_call: 500}
 columns:
   - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
   - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}

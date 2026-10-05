@@ -1,6 +1,6 @@
 abi: 1
 id: space.volume-spike
-version: 0.1.0
+version: 0.1.1
 name: {ru: "Всплеск объёма", en: "Volume spike"}
 description:
   ru: "Во сколько раз оборот за последние минуты выше среднего за сутки, по снимкам тикеров подключённых бирж. Это приближение: биржи отдают только скользящий объём за 24 часа, и оценка его прироста за окно ошибается, если сутки назад в то же время торговали необычно много или мало"
@@ -11,6 +11,7 @@ source: https://github.com/Space-Terminal/space-screener-sdk/tree/main/examples/
 min_terminal: 0.104.70
 http: []
 timer_ms: 10000
+limits: {cpu_ms_per_call: 1000}
 columns:
   - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
   - {key: exchange, type: exchange, title: {ru: "Биржа", en: "Exchange"}}

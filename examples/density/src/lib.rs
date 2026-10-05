@@ -3,19 +3,11 @@ use std::collections::BTreeSet;
 use space_screener::prelude::*;
 use space_screener::{BookSide, DensitySignal, DensityStatus};
 
-const FAVORITES: &str = "favorites";
 const BLACKLIST: &str = "blacklist";
+/// Favourite levels of 0.1.0; favourites are the terminal's since 0.1.1.
+const LEGACY_FAVORITES: &str = "favorites";
 /// Rows above this with a full snapshot (~20000 levels) do not fit the plugin's memory.
 const ROWS_MAX: i64 = 5000;
-
-/// Comma- or space-separated exchange slugs, lower case.
-fn slugs(text: Option<&str>) -> Vec<String> {
-    text.unwrap_or_default()
-        .split([',', ';', ' '])
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
 
 /// Exchange, symbol and market of a level: the blacklist hides an instrument, not one price.
 fn instrument(signal: &Signal, density: &DensitySignal) -> String {
@@ -25,9 +17,6 @@ fn instrument(signal: &Signal, density: &DensitySignal) -> String {
 #[derive(Debug, Clone, PartialEq)]
 struct Filter {
     search: String,
-    include: Vec<String>,
-    exclude: Vec<String>,
-    market: Option<Market>,
     side: Option<BookSide>,
     hide_dead: bool,
     min_current: f64,
@@ -51,13 +40,6 @@ impl Filter {
                 .unwrap_or_default()
                 .trim()
                 .to_ascii_uppercase(),
-            include: slugs(params.str("exchanges")),
-            exclude: slugs(params.str("exclude_exchanges")),
-            market: match params.str("market") {
-                Some("spot") => Some(Market::Spot),
-                Some("futures") => Some(Market::Futures),
-                _ => None,
-            },
             side: match params.str("side") {
                 Some("bid") => Some(BookSide::Bid),
                 Some("ask") => Some(BookSide::Ask),
@@ -82,9 +64,6 @@ impl Filter {
             _ => true,
         };
         (self.search.is_empty() || signal.symbol.contains(&self.search))
-            && self.market.is_none_or(|m| m == d.market)
-            && (self.include.is_empty() || self.include.contains(&d.exchange))
-            && !self.exclude.contains(&d.exchange)
             && self.side.is_none_or(|s| s == d.side)
             && !(self.hide_dead && d.status == DensityStatus::Dead)
             && d.notional_current_usd >= self.min_current
@@ -97,43 +76,29 @@ impl Filter {
     }
 }
 
-/// Favourite levels (on top, by signal id) and blacklisted instruments (at the bottom or
-/// hidden); kept in `kv`.
+/// Blacklisted instruments (at the bottom or hidden), kept in `kv`. Favourite tickers are the
+/// terminal's: it pins them on top of every screener.
 #[derive(Debug, Clone, Default)]
 struct Curation {
-    favorites: BTreeSet<String>,
     blacklist: BTreeSet<String>,
 }
 
 impl Curation {
     fn load() -> Self {
-        let set = |key| {
-            kv_get::<BTreeSet<String>>(key)
+        Self {
+            blacklist: kv_get::<BTreeSet<String>>(BLACKLIST)
                 .ok()
                 .flatten()
-                .unwrap_or_default()
-        };
-        Self {
-            favorites: set(FAVORITES),
-            blacklist: set(BLACKLIST),
+                .unwrap_or_default(),
         }
     }
 
-    fn rank(&self, id: &str, instrument: &str) -> i32 {
-        if self.favorites.contains(id) {
-            1
-        } else if self.blacklist.contains(instrument) {
+    fn rank(&self, instrument: &str) -> i32 {
+        if self.blacklist.contains(instrument) {
             -1
         } else {
             0
         }
-    }
-
-    fn toggle_favorite(&mut self, id: &str) -> Result<(), space_screener::Error> {
-        if !self.favorites.remove(id) {
-            self.favorites.insert(id.to_string());
-        }
-        kv_set(FAVORITES, &self.favorites)
     }
 
     fn toggle_blacklist(&mut self, instrument: &str) -> Result<(), space_screener::Error> {
@@ -141,19 +106,6 @@ impl Curation {
             self.blacklist.insert(instrument.to_string());
         }
         kv_set(BLACKLIST, &self.blacklist)
-    }
-
-    /// Favourites of levels that are gone would pile up in `kv`.
-    fn forget_favorites_except(
-        &mut self,
-        alive: &BTreeSet<&str>,
-    ) -> Result<(), space_screener::Error> {
-        let before = self.favorites.len();
-        self.favorites.retain(|id| alive.contains(id.as_str()));
-        if self.favorites.len() == before {
-            return Ok(());
-        }
-        kv_set(FAVORITES, &self.favorites)
     }
 }
 
@@ -185,14 +137,6 @@ fn status_cell(status: DensityStatus, lang: Lang) -> Cell {
     }
 }
 
-fn favorite_cell(on: bool) -> Cell {
-    if on {
-        Cell::new("★").tone(Tone::Accent)
-    } else {
-        Cell::muted("☆")
-    }
-}
-
 fn blacklist_cell(on: bool) -> Cell {
     if on {
         Cell::new("⊘").tone(Tone::Neg)
@@ -211,7 +155,7 @@ fn faded(cell: impl Into<Cell>, dead: bool) -> Cell {
 struct Density {
     feed: SignalFeed,
     curation: Curation,
-    /// Rows must be rebuilt: new signals, other parameters or a ★/⊘ click.
+    /// Rows must be rebuilt: new signals, other parameters or a ⊘ click.
     dirty: bool,
     unavailable: bool,
 }
@@ -228,7 +172,7 @@ impl Default for Density {
 }
 
 impl Density {
-    /// Levels that pass the filter, favourites first, then the newest, at most `limit`.
+    /// Levels that pass the filter, the newest first and the blacklist last, at most `limit`.
     fn visible(
         &self,
         filter: &Filter,
@@ -247,7 +191,7 @@ impl Density {
             .collect();
         levels.sort_by_cached_key(|(signal, d)| {
             (
-                std::cmp::Reverse(self.curation.rank(&signal.id, &instrument(signal, d))),
+                std::cmp::Reverse(self.curation.rank(&instrument(signal, d))),
                 std::cmp::Reverse(signal.ts_ms),
             )
         });
@@ -267,13 +211,11 @@ impl Density {
             .map(|(signal, d)| {
                 let instrument = instrument(signal, d);
                 let dead = d.status == DensityStatus::Dead;
-                let favorite = self.curation.favorites.contains(&signal.id);
                 let blacklisted = self.curation.blacklist.contains(&instrument);
                 let market = MarketRef::new(d.exchange.as_str(), d.market, signal.symbol.as_str());
                 Row::new(signal.id.as_str())
                     .market_ref(&market)
-                    .rank(self.curation.rank(&signal.id, &instrument))
-                    .cell("fav", favorite_cell(favorite))
+                    .rank(self.curation.rank(&instrument))
                     .cell("ban", blacklist_cell(blacklisted))
                     .cell("time", faded(signal.ts_ms, dead))
                     .cell("exchange", faded(d.exchange.as_str(), dead))
@@ -329,6 +271,9 @@ impl Density {
 impl Screener for Density {
     fn init(&mut self, _init: &Init) -> ScreenerResult {
         self.curation = Curation::load();
+        if let Err(e) = kv_delete(LEGACY_FAVORITES) {
+            warn!("density: cannot drop the 0.1.0 favourites: {e}");
+        }
         Ok(())
     }
 
@@ -336,12 +281,6 @@ impl Screener for Density {
         let connected = self.feed.connected();
         match self.feed.poll() {
             Ok(update) => {
-                // A reset while the terminal is still connecting is empty: it says nothing
-                // about which favourite levels are gone.
-                if update.reset && self.feed.connected() && !self.feed.is_empty() {
-                    let alive: BTreeSet<&str> = self.feed.iter().map(|s| s.id.as_str()).collect();
-                    self.curation.forget_favorites_except(&alive)?;
-                }
                 self.dirty |= !update.is_empty() || self.unavailable;
                 self.unavailable = false;
             }
@@ -377,16 +316,9 @@ impl Screener for Density {
         let Some(d) = &signal.density else {
             return Ok(());
         };
-        match click.column.as_deref() {
-            Some("fav") => {
-                self.curation.toggle_favorite(id)?;
-                return self.render();
-            }
-            Some("ban") => {
-                self.curation.toggle_blacklist(&instrument(signal, d))?;
-                return self.render();
-            }
-            _ => {}
+        if click.column.as_deref() == Some("ban") {
+            self.curation.toggle_blacklist(&instrument(signal, d))?;
+            return self.render();
         }
         let market = MarketRef::new(d.exchange.as_str(), d.market, signal.symbol.as_str());
         let params = params();
@@ -434,12 +366,8 @@ mod tests {
         let s = level("d", 1, "alive", Some(100000.0));
         let d = s.density.as_ref().unwrap();
         assert!(filter(json!({})).passes(&s, d));
-        assert!(
-            filter(json!({"side": "bid", "market": "futures", "exchanges": "binance"}))
-                .passes(&s, d)
-        );
+        assert!(filter(json!({"side": "bid"})).passes(&s, d));
         assert!(!filter(json!({"side": "ask"})).passes(&s, d));
-        assert!(!filter(json!({"exclude_exchanges": "Binance"})).passes(&s, d));
         assert!(filter(json!({"max_distance": 0.5})).passes(&s, d));
         assert!(!filter(json!({"max_distance": 0.3})).passes(&s, d));
         assert!(!filter(json!({"max_eaten": 30})).passes(&s, d));
@@ -459,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn favourites_first_then_newest_within_the_limit() {
+    fn newest_first_blacklist_last_within_the_limit() {
         let mut density = Density::default();
         density.feed.apply(SignalsDelta {
             reset: true,
@@ -471,7 +399,6 @@ mod tests {
             ],
             ..SignalsDelta::default()
         });
-        density.curation.favorites.insert("old".to_string());
         let ids = |levels: Vec<(&Signal, &DensitySignal)>| {
             levels
                 .into_iter()
@@ -480,7 +407,7 @@ mod tests {
         };
         assert_eq!(
             ids(density.visible(&filter(json!({})), false, 2)),
-            ["old", "new"]
+            ["new", "mid"]
         );
         density
             .curation
@@ -489,6 +416,20 @@ mod tests {
         assert_eq!(
             ids(density.visible(&filter(json!({})), true, 10)),
             Vec::<String>::new()
+        );
+        assert_eq!(
+            ids(density.visible(&filter(json!({})), false, 10)),
+            ["new", "mid", "old"]
+        );
+        let mut eth = level("eth", 0, "alive", None);
+        eth.symbol = "ETHUSDT".to_string();
+        density.feed.apply(SignalsDelta {
+            upserts: vec![eth],
+            ..SignalsDelta::default()
+        });
+        assert_eq!(
+            ids(density.visible(&filter(json!({})), false, 10)),
+            ["eth", "new", "mid", "old"]
         );
     }
 }

@@ -100,9 +100,11 @@ feeds: []                               # reserved for trade/order-book streams;
 columns:                                # table columns, in display order
   - {key: symbol, type: symbol, title: {ru: "Тикер", en: "Symbol"}}
   - {key: oi, type: usd, title: {en: "OI, $"}, sort: desc, width: 120}
+  - {key: chg5, type: percent, title: {en: "OI 5m"}, show_if: col_chg5}   # shown while col_chg5 is true
 params:                                 # user-editable parameters
   - {key: min_oi, type: number, title: {en: "Min OI, $"}, default: 5000000, min: 0}
   - {key: side, type: select, title: {en: "Side"}, default: both, options: [both, long, short]}
+  - {key: col_chg5, type: bool, title: {en: "Show OI 5m"}, default: true}
 limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional; cpu_ms_per_call 50..=1000
 ```
 
@@ -113,6 +115,12 @@ limits: {memory_mb: 64, cpu_ms_per_call: 250}          # optional; cpu_ms_per_ca
   parameter key listed twice is refused.
 - `signals` lists each source at most once; a non-empty list needs `min_terminal: 0.104.72` or newer.
 - `width` of a column is 1..=2000 px.
+- `show_if` of a column names a `bool` parameter (`invalid_manifest` at `columns[i].show_if` otherwise):
+  the terminal (0.104.73 and newer) hides the column while that parameter is `false` and shows it
+  again when it turns `true`, with no reinstall — a checkbox «show column X» in the ⚙ dialog. Rows
+  may keep sending the column's cells. It needs no newer `min_terminal`: older terminals show the
+  column always. Users can also hide any column themselves in the pane (terminal 0.104.73+); that
+  choice belongs to the pane and is not sent to the plugin.
 - The first column with `sort` is the default sort of the pane.
 - `pricing`, `hosting`, `alerts` and other fields are ignored in v1.
 
@@ -169,6 +177,11 @@ Calls of one plugin never overlap: a click routed to `on_click` waits while `on_
 `on_click` only when the click needs custom logic, and keep `on_timer` rounds short; without the export
 the terminal opens the row's market at once. The Rust PDK exports `on_click` only with
 `export_screener!(T, on_click)`. A panic in the PDK is logged (message and location) before the trap.
+
+Arrow keys (terminal 0.104.73 and newer): the user can step through the rows with ↑/↓. The terminal
+then calls `on_click` for the new row as a left click — `column: null`, `button: "left"`, every
+modifier `false` — or, without the export, opens the row's market itself. The order books opened
+this way are replaced or retargeted by the terminal; the plugin does nothing special.
 
 ### TypeScript (`lang: ts`)
 
@@ -317,7 +330,10 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
   rows. `ttl_s` removes a row that was not re-emitted in time. Each row is at most 16 KiB as serialized
   JSON. At most 10000 rows or 32 MiB per plugin: beyond either cap the host evicts the least recently updated rows, so `replace: true` with more rows keeps the last ones of the batch. Sort and truncate in the plugin so the rows you want are the ones kept.
 - `symbol`, `exchange`, `market` make the row clickable: the default click opens that market.
-- `rank` (default 0): higher ranks stay above lower ones whatever the sort (pins, favourites).
+- `rank` (default 0): higher ranks stay above lower ones whatever the sort — the plugin's own order
+  (pins of its data, a blacklist at the bottom). Favourite tickers are the terminal's: from 0.104.73 it
+  shows its own ★ in every screener and keeps favourites above all other rows, so a plugin needs no
+  favourites column of its own.
 - A cell is a JSON number, string, bool or `null`, or `{"v": value, "tone"?: "pos"|"neg"|"muted"|"warn"|"accent", "text"?: "shown instead of v"}`.
   `exchanges` cells use `{"v": [{"exchange": "bybit", "market": "spot"}]}`.
 
