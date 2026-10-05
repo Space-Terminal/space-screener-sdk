@@ -86,7 +86,8 @@ message and location (`st logs`) before the terminal restarts the plugin.
 Clicks: rows with `symbol`/`exchange`/`market` open their order book on click — the terminal does it
 at once, no code needed. Only for custom click logic implement `on_click` and export with
 `export_screener!(MyScreener, on_click)`; such clicks wait while `on_timer` runs (calls never overlap),
-so keep rounds short.
+so keep rounds short. Arrow keys ↑/↓ over the pane (terminal 0.104.73+) arrive as the same left click
+(`column` none, no modifiers); the terminal replaces the books they open itself.
 
 ## Host API (all return `space_screener::Result`, errors carry a `code()`)
 

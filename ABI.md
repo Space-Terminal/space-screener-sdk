@@ -178,6 +178,11 @@ Calls of one plugin never overlap: a click routed to `on_click` waits while `on_
 the terminal opens the row's market at once. The Rust PDK exports `on_click` only with
 `export_screener!(T, on_click)`. A panic in the PDK is logged (message and location) before the trap.
 
+Arrow keys (terminal 0.104.73 and newer): the user can step through the rows with ↑/↓. The terminal
+then calls `on_click` for the new row as a left click — `column: null`, `button: "left"`, every
+modifier `false` — or, without the export, opens the row's market itself. The order books opened
+this way are replaced or retargeted by the terminal; the plugin does nothing special.
+
 ### TypeScript (`lang: ts`)
 
 `st build` bundles `src/index.ts` with esbuild and compiles it with extism-js 1.7.0 (QuickJS). js-pdk
