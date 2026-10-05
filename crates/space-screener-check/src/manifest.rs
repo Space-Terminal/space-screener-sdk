@@ -188,6 +188,9 @@ pub struct Column {
     pub sort: Option<SortDir>,
     #[serde(default)]
     pub width: Option<f32>,
+    /// Key of a `bool` parameter: the terminal shows the column only while it is `true`.
+    #[serde(default)]
+    pub show_if: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,6 +390,8 @@ struct RawColumn {
     sort: Option<String>,
     #[serde(default)]
     width: Option<f64>,
+    #[serde(default)]
+    show_if: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -606,6 +611,7 @@ fn check(yaml: &str, terminal: Option<&semver::Version>) -> (Option<Manifest>, R
 
     let columns = check_columns(raw.columns, &mut r);
     let params = check_params(raw.params, &mut r);
+    check_show_if(&columns, &params, &mut r);
 
     let memory_mb = raw.limits.memory_mb.unwrap_or(MAX_MEMORY_MB);
     if !(1..=MAX_MEMORY_MB).contains(&memory_mb) {
@@ -650,7 +656,7 @@ fn check(yaml: &str, terminal: Option<&semver::Version>) -> (Option<Manifest>, R
         history,
         signals,
         timer: Duration::from_millis(timer_ms),
-        columns,
+        columns: columns.into_iter().map(|(_, column)| column).collect(),
         params,
         limits: Limits {
             memory_mb,
@@ -678,7 +684,7 @@ fn required_semver(r: &mut Report, field: &str, value: Option<String>) -> Option
     }
 }
 
-fn check_columns(raw: Vec<RawColumn>, r: &mut Report) -> Vec<Column> {
+fn check_columns(raw: Vec<RawColumn>, r: &mut Report) -> Vec<(usize, Column)> {
     if raw.is_empty() {
         r.error(
             Code::InvalidManifest,
@@ -738,16 +744,41 @@ fn check_columns(raw: Vec<RawColumn>, r: &mut Report) -> Vec<Column> {
             r.warn(format!("column `{}` has no title; the key is shown", c.key));
         }
         if let Some(kind) = kind {
-            columns.push(Column {
-                key: c.key,
-                kind,
-                title,
-                sort,
-                width,
-            });
+            columns.push((
+                i,
+                Column {
+                    key: c.key,
+                    kind,
+                    title,
+                    sort,
+                    width,
+                    show_if: c.show_if,
+                },
+            ));
         }
     }
     columns
+}
+
+fn check_show_if(columns: &[(usize, Column)], params: &[Param], r: &mut Report) {
+    for (i, column) in columns {
+        let Some(key) = &column.show_if else {
+            continue;
+        };
+        let problem = match params.iter().find(|p| &p.key == key) {
+            None => format!("column `{}` show_if names no parameter `{key}`", column.key),
+            Some(p) if p.kind != ParamType::Bool => format!(
+                "column `{}` show_if must name a bool parameter; `{key}` is not one",
+                column.key
+            ),
+            Some(_) => continue,
+        };
+        r.error(
+            Code::InvalidManifest,
+            format!("columns[{i}].show_if"),
+            problem,
+        );
+    }
 }
 
 fn check_params(raw: Vec<RawParam>, r: &mut Report) -> Vec<Param> {
@@ -1080,6 +1111,51 @@ limits: {memory_mb: 128}
             );
             assert_eq!(is_valid(&yaml), ok, "width {width}");
         }
+    }
+
+    fn show_if_manifest(show_if: &str) -> String {
+        host_manifest("")
+            .replace(
+                "{key: oi, type: usd, sort: desc}",
+                &format!("{{key: oi, type: usd, sort: desc, show_if: {show_if}}}"),
+            )
+            .replace(
+                "params: [{key: threshold, type: number, default: 5, min: 1, max: 50}]",
+                "params: [{key: threshold, type: number, default: 5, min: 1, max: 50}, \
+                 {key: col_oi, type: bool, default: true}]",
+            )
+    }
+
+    fn show_if_errors(yaml: &str) -> Vec<String> {
+        Manifest::parse(yaml)
+            .unwrap_err()
+            .errors
+            .into_iter()
+            .map(|issue| issue.path)
+            .collect()
+    }
+
+    #[test]
+    fn show_if_names_a_bool_parameter() {
+        let manifest = Manifest::parse(&show_if_manifest("col_oi")).unwrap();
+        assert_eq!(manifest.columns[1].show_if.as_deref(), Some("col_oi"));
+        assert_eq!(manifest.columns[0].show_if, None);
+    }
+
+    #[test]
+    fn show_if_of_a_missing_parameter_is_refused() {
+        assert_eq!(
+            show_if_errors(&show_if_manifest("col_volume")),
+            ["columns[1].show_if"]
+        );
+    }
+
+    #[test]
+    fn show_if_of_a_non_bool_parameter_is_refused() {
+        assert_eq!(
+            show_if_errors(&show_if_manifest("threshold")),
+            ["columns[1].show_if"]
+        );
     }
 
     #[test]
