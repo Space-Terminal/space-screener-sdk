@@ -610,8 +610,9 @@ fn check(yaml: &str, terminal: Option<&semver::Version>) -> (Option<Manifest>, R
     }
 
     let columns = check_columns(raw.columns, &mut r);
+    let declared: HashSet<String> = raw.params.iter().map(|p| p.key.clone()).collect();
     let params = check_params(raw.params, &mut r);
-    check_show_if(&columns, &params, &mut r);
+    check_show_if(&columns, &params, &declared, &mut r);
 
     let memory_mb = raw.limits.memory_mb.unwrap_or(MAX_MEMORY_MB);
     if !(1..=MAX_MEMORY_MB).contains(&memory_mb) {
@@ -760,12 +761,23 @@ fn check_columns(raw: Vec<RawColumn>, r: &mut Report) -> Vec<(usize, Column)> {
     columns
 }
 
-fn check_show_if(columns: &[(usize, Column)], params: &[Param], r: &mut Report) {
+/// `declared` holds every parameter key of the raw manifest: a parameter dropped by
+/// [`check_params`] already has its own error, so its columns stay quiet.
+fn check_show_if(
+    columns: &[(usize, Column)],
+    params: &[Param],
+    declared: &HashSet<String>,
+    r: &mut Report,
+) {
     for (i, column) in columns {
         let Some(key) = &column.show_if else {
             continue;
         };
         let problem = match params.iter().find(|p| &p.key == key) {
+            None if key.is_empty() => {
+                format!("column `{}` show_if must name a bool parameter", column.key)
+            }
+            None if declared.contains(key) => continue,
             None => format!("column `{}` show_if names no parameter `{key}`", column.key),
             Some(p) if p.kind != ParamType::Bool => format!(
                 "column `{}` show_if must name a bool parameter; `{key}` is not one",
@@ -1156,6 +1168,23 @@ limits: {memory_mb: 128}
             show_if_errors(&show_if_manifest("threshold")),
             ["columns[1].show_if"]
         );
+    }
+
+    #[test]
+    fn empty_show_if_is_refused() {
+        assert_eq!(
+            show_if_errors(&show_if_manifest("\"\"")),
+            ["columns[1].show_if"]
+        );
+    }
+
+    #[test]
+    fn show_if_of_a_broken_parameter_reports_only_the_parameter() {
+        let yaml = show_if_manifest("col_oi").replace(
+            "{key: col_oi, type: bool, default: true}",
+            "{key: col_oi, type: boolean, default: true}",
+        );
+        assert_eq!(show_if_errors(&yaml), ["params[1]"]);
     }
 
     #[test]
