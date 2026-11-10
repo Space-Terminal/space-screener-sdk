@@ -242,13 +242,23 @@ HttpResponse {"status": 200, "headers": {"content-type": "application/json"}, "b
   URLs with user info (`https://user:pass@host/…`) are refused (`bad_request`).
 - Redirects are not followed: a 3xx response is returned to the plugin as is.
 - Headers `authorization`, `cookie`, `host` and `proxy-*` are refused (`forbidden_header`).
-- `timeout_ms` is 1000..=10000 (default 10000). A per-host quota waits within that timeout.
+- `timeout_ms` is 1000..=10000 (default 10000). A request waits for its host's quota within that
+  timeout; if the next slot is further away than the time left, `http` fails at once with `timeout`
+  and the message `quota for <host> did not free up within the timeout, next slot in N s`.
 - Response bodies are UTF-8 text (lossy), at most 8 MiB each (`too_large`).
 - `http_batch` runs up to 8 requests at a time with the same quotas; use it for per-symbol endpoints.
   The bodies of one batch total at most 48 MiB; items past that get `too_large`.
-- `fapi.binance.com` is limited to 5 requests/s (its weight limit is shared with the user's trading IP):
-  a batch of N requests there takes about N/5 s.
+- `api.binance.com`, `fapi.binance.com` and `dapi.binance.com` are limited to 5 requests/s, other hosts
+  to 10 requests/s (Binance's weight limit is shared with the user's trading IP): a batch of N requests
+  to a Binance host takes about N/5 s.
+- When a host pushes back, the terminal pauses all plugin requests to that host: after `429` for
+  `Retry-After` seconds (60 s without it), after `418` (IP ban) for `Retry-After` seconds (5 min without
+  it), at most 3 days; on Binance hosts, when `x-mbx-used-weight-1m` is above half of the per-minute
+  weight limit (6000 for `api.binance.com`, 2400 for `fapi`/`dapi`), until the end of the current
+  minute. The `429`/`418` response itself is returned to the plugin as is. A pause is only ever
+  extended; requests made during it wait or fail with `timeout` as above.
 - Traffic goes through the terminal's proxy routing and its own per-host quotas, separate from trading.
+  Quotas and pauses are per host and shared by all plugins in the terminal, whatever the proxy route.
 
 ### Tickers, symbols, exchanges
 
@@ -361,7 +371,7 @@ Survives restarts of the plugin and the terminal. The whole store is at most 1 M
 | Memory | `limits.memory_mb`, at most 64 MB |
 | CPU per call | `limits.cpu_ms_per_call` (default 250, allowed 50–1000) of the plugin thread's CPU time for the whole call, wasm plus host work done for it (JSON, kv, rows); waiting for the network costs nothing. Once the budget is spent, the next host call aborts the call. A pure wasm loop with no host calls is cancelled after `max(5 × budget, 5 s)` wall time outside host functions. Going over the budget, an abort, a runaway cancel and the 600 s wall timeout each count as a violation; 3 violations in the last 10 calls stop the plugin (`limit`). A call that used at least 50 % of its budget writes `cpu … ms (… ms in host functions) of … ms, wall … ms` to the screener log. |
 | CPU share | besides the per-call budget, a plugin may use at most 30 s of CPU (half a core) over any sliding 60 s window, counted from the full CPU of every call that ended in it, including aborted and cancelled ones; above that the plugin stops with status `limit` ("average CPU over 50 % of a core"). |
-| Wall time per call | 600 s: one call, HTTP waits included, must finish within it; a round of N requests to `fapi.binance.com` takes about N/5 s |
+| Wall time per call | 600 s: one call, HTTP waits included, must finish within it; a round of N requests to a Binance host takes about N/5 s |
 | After a trap | the terminal recreates the plugin and calls `init` again; in-memory state is lost, `kv` survives |
 | `screener.wasm` | at most 10 MiB |
 | HTTP | `timeout_ms` 1000..=10000; body ≤ 8 MiB per response, ≤ 48 MiB per `http_batch` |
