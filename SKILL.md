@@ -145,8 +145,8 @@ Helpers:
   it for rows and clicks. The manifest `http` must list the 8 hosts explicitly (see the example below).
   Parsers per exchange (`oi::bybit::parse(body)` …) are public if you need only part of it.
 - Binance has no bulk open interest: one request per symbol, and the terminal allows 5 requests/s to
-  `fapi.binance.com`, so a round of N symbols takes about N/5 s (200 → 40 s). The collector polls the
-  top `BINANCE_TOP_N` = 200 USDT perpetuals by 24h volume; change it with
+  each Binance host (`api`, `fapi`, `dapi`), so a round of N symbols takes about N/5 s (200 → 40 s).
+  The collector polls the top `BINANCE_TOP_N` = 200 USDT perpetuals by 24h volume; change it with
   `collector.set_binance_top_n(n)`, n in 1..=600 (600 covers every USDT perpetual, ≈ 2 min).
   Keep `timer_ms` ≥ 60000 when one call polls Binance; with rotation shorter timers are fine.
 
@@ -206,7 +206,7 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
   ended in it (aborted and cancelled ones too); above that the plugin stops with `limit` ("average CPU
   over 50 % of a core"). A short `timer_ms` with heavy parsing hits this first.
 - One call (`on_timer` with all its HTTP waits) must finish within 600 s of wall time. Budget
-  per-symbol rounds: `fapi.binance.com` allows 5 requests/s, so N symbols ≈ N/5 s.
+  per-symbol rounds: each Binance host allows 5 requests/s, so N symbols ≈ N/5 s.
 - After a crash the terminal restarts the plugin (`init` again): in-memory history is lost, `kv` stays.
 
 ## Pitfalls in wasm
@@ -224,7 +224,8 @@ user connected — check `exchanges()`. Markets: `spot`, `futures`.
 | `forbidden_export` / start section | build a `cdylib` for wasm32-unknown-unknown with `st build`; WASI/C runtimes (`_start`, `_initialize`) are refused |
 | `invalid_wasm: function N: … KiB of code, the limit is 256 KiB per function` (or nesting / br_table) | one enormous function — usually a giant `match` or a table built inline: move the data into a `static`, split the function |
 | `limit` status / cpu overrun | host work for your calls counts too: parse only the fields you need (`#[derive(Deserialize)]` structs, not `serde_json::Value`), emit fewer/smaller rows, raise `limits.cpu_ms_per_call`, cache slow-changing metadata |
-| slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints or rotate groups of exchanges (exchange rate limits are shared with the user's trading IP; `fapi.binance.com` is capped at 5 requests/s) |
+| slow round with hundreds of requests | `http_batch`, not a loop of `http`; keep `timer_ms` ≥ 60000 for per-symbol endpoints or rotate groups of exchanges (exchange rate limits are shared with the user's trading IP; Binance hosts are capped at 5 requests/s) |
+| instant `timeout` on http with `next slot in N s` | the terminal paused the host after `429`/`418` or Binance weight above half the per-minute limit; wait out the pause or poll less often |
 | history (5/15 min changes) resets | every `st dev` reinstall and every crash restarts the plugin; windows fill again from scratch |
 | clicks feel slow | do not export `on_click` unless needed — without it the terminal opens the row's market at once |
 | `not_in_click` | `open_market` only from `on_click` exported with `export_screener!(T, on_click)` |
